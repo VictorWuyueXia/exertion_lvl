@@ -46,6 +46,8 @@ exertion_lvl/
 - pandas
 - numpy
 - scikit-learn
+- wandb (实验跟踪)
+- psutil (系统监控)
 
 ## 安装依赖
 
@@ -55,7 +57,19 @@ pip install -r requirements.txt
 
 ## 使用方法
 
-### 1. 数据预处理
+### 1. 快速设置WandB（推荐）
+
+```bash
+# 运行快速设置脚本
+./scripts/setup_wandb.sh
+
+# 或者手动设置
+pip install wandb psutil
+wandb login
+python test/test_wandb.py
+```
+
+### 2. 数据预处理
 
 ```python
 from src.data.process_data import process_data_pipeline
@@ -64,7 +78,23 @@ from src.data.process_data import process_data_pipeline
 process_data_pipeline()
 ```
 
-### 2. GPU监控
+### 3. 开始训练（带WandB监控）
+
+```bash
+# 使用配置文件版本（推荐）
+python src/main_train_config.py --config config/vgg16_wav2vec2_layer4_mfcc_exertion.yaml
+
+# 或者使用基础版本
+python src/main_train.py
+```
+
+### 4. 查看训练进度
+
+1. 终端实时输出
+2. 访问 [https://wandb.ai](https://wandb.ai) 查看可视化仪表板
+3. 监控GPU使用率、系统资源和训练指标
+
+### 5. GPU监控
 
 ```python
 from test.monitor_gpu import monitor_gpu_usage
@@ -78,7 +108,9 @@ monitor_gpu_usage()
 - **wav2vec2特征提取**: 使用预训练的wav2vec2模型提取高质量的音频特征
 - **模块化设计**: 清晰的数据处理管道，便于维护和扩展
 - **GPU优化**: 针对RTX4070等现代GPU进行优化
-- **实时监控**: 提供GPU使用情况监控工具
+- **Weights & Biases集成**: 完整的实验跟踪和监控系统
+- **实时监控**: 提供GPU使用情况、系统资源和训练指标监控
+- **可视化仪表板**: 实时查看训练进度和性能分析
 
 ## 数据说明
 
@@ -93,6 +125,11 @@ monitor_gpu_usage()
 3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
 4. 推送到分支 (`git push origin feature/AmazingFeature`)
 5. 开启 Pull Request
+
+## 文档
+
+- [WandB配置和使用指南](docs/wandb_setup_guide.md) - 详细的WandB设置和使用说明
+- [项目结构说明](data/data_README.md) - 数据格式和处理说明
 
 ## 联系方式
 
