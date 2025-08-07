@@ -230,7 +230,7 @@ class OptimizedAcousticExtractor:
                 ).squeeze(0).T
 
 # --- Optimized Wav2Vec2 extraction with batching for RTX 4070 ---
-def extract_wav2vec2_features_batch(audio_list, sr_list, selected_layers=(4,), sr_target=16000, batch_size=None):
+def extract_wav2vec2_features_batch(audio_list, sr_list, selected_layers=(4,), sr_target=16000, batch_size=None, target_frames=300):
     """Extract Wav2Vec2 features in batches - optimized for RTX 4070 memory management"""
     initialize_wav2vec2_model()
     
@@ -294,6 +294,17 @@ def extract_wav2vec2_features_batch(audio_list, sr_list, selected_layers=(4,), s
                     audio_feature_length = int(feature_length * len(processed_audio[i + j]) / max_len)
                     
                     layer_features = outputs.hidden_states[layer_idx][j, :audio_feature_length].cpu().numpy()
+                    
+                    # 对齐到目标帧数
+                    if len(layer_features) != target_frames:
+                        if len(layer_features) < target_frames:
+                            # 填充
+                            pad_length = target_frames - len(layer_features)
+                            layer_features = np.pad(layer_features, ((0, pad_length), (0, 0)), mode='edge')
+                        else:
+                            # 截断
+                            layer_features = layer_features[:target_frames]
+                    
                     audio_results.append(layer_features)
                 results.append(audio_results)
         
@@ -337,9 +348,8 @@ def process_single_file_with_labels(args):
         # Load audio
         y, sr = load_and_resample_audio_optimized(wav_path, sr_target)
         
-        # Calculate target frames
-        duration = len(y) / sr
-        target_frames = int(duration * sr_feature)
+        # 固定目标帧数为300，对应20Hz采样率下的15秒音频
+        target_frames = 300
         
         # Extract acoustic features using GPU
         acoustic_extractor = OptimizedAcousticExtractor()
@@ -351,10 +361,20 @@ def process_single_file_with_labels(args):
                 np.save(os.path.join(session_dir, f"{feature_name}.npy"), feature_data)
         
         # Extract Wav2Vec2 features
-        wav2vec_features = extract_wav2vec2_features_batch([y], [sr], selected_layers, sr_target, batch_size=1)[0]
+        wav2vec_features = extract_wav2vec2_features_batch([y], [sr], selected_layers, sr_target, batch_size=1, target_frames=target_frames)[0]
         
-        # Save Wav2Vec2 features
-        for actual_layer_idx, layer_features in zip(selected_layers, wav2vec_features):
+        # 确保wav2vec2特征也统一到300帧
+        for i, (actual_layer_idx, layer_features) in enumerate(zip(selected_layers, wav2vec_features)):
+            # 对齐到300帧
+            if len(layer_features) != target_frames:
+                if len(layer_features) < target_frames:
+                    # 填充
+                    pad_length = target_frames - len(layer_features)
+                    layer_features = np.pad(layer_features, ((0, pad_length), (0, 0)), mode='edge')
+                else:
+                    # 截断
+                    layer_features = layer_features[:target_frames]
+            
             np.save(os.path.join(wav2vec_dir, f"wav2vec2_layer{actual_layer_idx}.npy"), layer_features)
         
         # Save exertion level label if available
@@ -446,8 +466,8 @@ def process_files_in_batches_with_labels(filenames, audio_dir, features_dir, lab
             
             try:
                 y, sr = load_and_resample_audio_optimized(wav_path, sr_target)
-                duration = len(y) / sr
-                target_frames = int(duration * sr_feature)
+                # 固定目标帧数为300
+                target_frames = 300
                 
                 audio_batch.append(y)
                 sr_batch.append(sr)
@@ -484,7 +504,7 @@ def process_files_in_batches_with_labels(filenames, audio_dir, features_dir, lab
                         np.save(os.path.join(session_dir, "exertion_level.npy"), exertion_level)
             
             # Process Wav2Vec2 in batch
-            wav2vec_results = extract_wav2vec2_features_batch(audio_batch, sr_batch, selected_layers, sr_target)
+            wav2vec_results = extract_wav2vec2_features_batch(audio_batch, sr_batch, selected_layers, sr_target, target_frames=300)
             
             # Save Wav2Vec2 results
             for session_id, wav2vec_features in zip(session_ids, wav2vec_results):

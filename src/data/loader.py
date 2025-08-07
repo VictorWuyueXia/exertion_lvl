@@ -201,6 +201,51 @@ def get_dataloader_from_sessions(session_ids, meta_df, feature_dir, labels_df=No
     
     return dataloader
 
+def split_train_test_val(df, test_size=0.15, val_size=0.15, random_state=42):
+    """
+    将数据分割为训练集、验证集和测试集
+    保持同一参与者的数据在同一集合中
+    """
+    from sklearn.model_selection import train_test_split
+    
+    # 按参与者分组
+    participant_groups = df.groupby('participant')
+    
+    # 获取所有参与者ID
+    participants = list(participant_groups.groups.keys())
+    
+    # 首先分割出测试集
+    train_val_participants, test_participants = train_test_split(
+        participants, 
+        test_size=test_size, 
+        random_state=random_state,
+        stratify=None  # 无法按exertion level分层，因为每个参与者有多个level
+    )
+    
+    # 从剩余参与者中分割出验证集
+    train_participants, val_participants = train_test_split(
+        train_val_participants,
+        test_size=val_size/(1-test_size),  # 调整比例
+        random_state=random_state
+    )
+    
+    # 获取各集合的session IDs
+    train_sessions = []
+    val_sessions = []
+    test_sessions = []
+    
+    for participant in train_participants:
+        train_sessions.extend(participant_groups.get_group(participant)['session'].tolist())
+    
+    for participant in val_participants:
+        val_sessions.extend(participant_groups.get_group(participant)['session'].tolist())
+    
+    for participant in test_participants:
+        test_sessions.extend(participant_groups.get_group(participant)['session'].tolist())
+    
+    return train_sessions, val_sessions, test_sessions
+
+
 # 示例使用
 if __name__ == "__main__":
     # 示例：加载特征数据

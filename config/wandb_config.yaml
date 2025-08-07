@@ -1,0 +1,80 @@
+# Weights & Biases 配置文件
+# 用于监控训练过程和GPU使用情况
+
+# ==================== WandB 基础配置 ====================
+wandb:
+  # 项目名称
+  project: "exertion-level-detection"
+  
+  # 实体/用户名（可选）
+  entity: null  # 如果设置了用户名，填写用户名
+  
+  # 实验名称模板
+  name: "vgg16_wav2vec2_layer4_{timestamp}"
+  
+  # 实验标签
+  tags: ["vgg16", "wav2vec2", "exertion-detection", "audio-analysis"]
+  
+  # 实验描述
+  description: "基于VGG16和wav2vec2第4层的运动强度检测模型训练"
+  
+  # 是否启用WandB
+  enabled: true
+  
+  # 日志配置
+  logging:
+    # 训练指标
+    train_metrics: true
+    # 验证指标
+    val_metrics: true
+    # 测试指标
+    test_metrics: true
+    # 模型参数
+    model_params: true
+    # 系统信息
+    system_info: true
+    # GPU使用情况
+    gpu_usage: true
+    # 学习率
+    learning_rate: true
+    # 梯度信息
+    gradients: true
+    # 预测结果
+    predictions: true
+    # 混淆矩阵
+    confusion_matrix: true
+    # 特征重要性
+    feature_importance: true
+  
+  # 监控配置
+  monitoring:
+    # GPU监控间隔（秒）
+    gpu_interval: 30
+    # 系统监控间隔（秒）
+    system_interval: 60
+    # 是否监控内存使用
+    memory_usage: true
+    # 是否监控CPU使用
+    cpu_usage: true
+    # 是否监控网络使用
+    network_usage: false
+  
+  # 模型保存配置
+  model_save:
+    # 是否保存最佳模型
+    save_best: true
+    # 是否保存检查点
+    save_checkpoints: true
+    # 检查点保存间隔（epoch）
+    checkpoint_interval: 10
+  
+  # 可视化配置
+  visualization:
+    # 是否生成学习曲线
+    learning_curves: true
+    # 是否生成混淆矩阵
+    confusion_matrix: true
+    # 是否生成特征重要性图
+    feature_importance: true
+    # 是否生成预测分布图
+    prediction_distribution: true
