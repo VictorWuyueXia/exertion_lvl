@@ -93,8 +93,8 @@ class VGG16ExertionModel(nn.Module):
         )
         
         # 全局平均池化后的特征维度
-        # 输入300帧，经过5次maxpool (300 -> 150 -> 75 -> 37 -> 18 -> 9)
-        self.feature_dim = 512 * 9
+        # 使用adaptive_avg_pool1d后，特征维度为512
+        self.feature_dim = 512
         
         # 分类器
         self.classifier = nn.Sequential(

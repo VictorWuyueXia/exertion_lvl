@@ -105,10 +105,10 @@ def prepare_dataset(config: ConfigManager):
         metadata_df=metadata_df,
         feature_dir=feature_dir,
         labels_df=labels_df,
-        use_acoustic=config.get('data.features.use_acoustic'),
-        use_mfb=config.get('data.features.use_mfb'),
-        use_embed=config.get('data.features.use_wav2vec2'),
-        selected_wav2vec2_layers=config.get('data.features.wav2vec2_layers')
+        use_acoustic=config.get('data.features.use_acoustic', True),
+        use_mfb=config.get('data.features.use_mfb', False),
+        use_embed=config.get('data.features.use_wav2vec2', True),
+        selected_wav2vec2_layers=config.get('data.features.wav2vec2_layers', [4])
     )
     
     print(f"数据集创建完成，包含 {len(dataset)} 个样本")

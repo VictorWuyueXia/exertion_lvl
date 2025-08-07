@@ -160,10 +160,13 @@ class ConfigManager:
     def get_model_config(self) -> Dict[str, Any]:
         """获取模型配置"""
         return {
-            'model_type': self.get('model.model_type'),
-            'architecture': self.get('model.architecture'),
-            'num_classes': self.get('model.num_classes'),
-            'optimize_for_rtx4070': self.get('model.optimize_for_rtx4070'),
+            'mfcc_dim': self.get('model.mfcc_dim', 40),  # 实际MFCC维度是40
+            'wav2vec2_dim': self.get('model.wav2vec2_dim', 768),
+            'num_classes': self.get('model.num_classes', 6),  # 5-10级，共6个类别
+            'dropout_rate': self.get('model.dropout_rate', 0.5),
+            'use_mfcc': self.get('data.features.use_mfcc', True),
+            'use_wav2vec2': self.get('data.features.use_wav2vec2', True),
+            'optimize_for_rtx4070': self.get('model.optimize_for_rtx4070', True),
         }
     
     def get_evaluation_config(self) -> Dict[str, Any]:

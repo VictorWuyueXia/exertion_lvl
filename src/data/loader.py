@@ -7,7 +7,7 @@ import torch
 import torchaudio
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import Dataset, DataLoader
-from set_seed import seed_worker
+from src.utils.set_seed import seed_worker
 
 # --- 1. Metadata extraction ---
 def get_session_metadata(feature_dir):
@@ -70,9 +70,17 @@ class AudioFeatureDataset(Dataset):
         embeds = []
         
         if self.use_acoustic:
-            acoustic_path = os.path.join(session_feature_dir, "acoustic.npy")
-            if os.path.exists(acoustic_path):
-                acoustic = np.load(acoustic_path)  # (T1, D1)
+            # 尝试加载MFCC特征
+            mfcc_path = os.path.join(session_feature_dir, "mfcc.npy")
+            if os.path.exists(mfcc_path):
+                acoustic = np.load(mfcc_path)  # (T1, D1)
+
+            else:
+                # 如果没有MFCC，尝试加载acoustic特征
+                acoustic_path = os.path.join(session_feature_dir, "acoustic.npy")
+                if os.path.exists(acoustic_path):
+                    acoustic = np.load(acoustic_path)  # (T1, D1)
+
         
         if self.use_mfb:
             mfb_path = os.path.join(session_feature_dir, "mfb.npy")
@@ -80,7 +88,7 @@ class AudioFeatureDataset(Dataset):
                 mfb = np.load(mfb_path)  # (T2, D2)
             
         if self.use_embed:
-            if len(self.selected_wav2vec2_layers) > 1:
+            if self.selected_wav2vec2_layers and len(self.selected_wav2vec2_layers) > 1:
                 embed_list = []
                 for layer_id in self.selected_wav2vec2_layers:
                     layer_path = os.path.join(session_feature_dir, f"wav2vec2/wav2vec2_layer{layer_id}.npy")
@@ -89,17 +97,22 @@ class AudioFeatureDataset(Dataset):
                 if embed_list:
                     embeds = np.concatenate(embed_list, axis=1)  # shape: (T, D1 + D2)
             else:
-                layer_id = self.selected_wav2vec2_layers[0]
+                layer_id = self.selected_wav2vec2_layers[0] if self.selected_wav2vec2_layers else 4
                 layer_path = os.path.join(session_feature_dir, f"wav2vec2/wav2vec2_layer{layer_id}.npy")
                 if os.path.exists(layer_path):
                     embeds = np.load(layer_path)
 
+
         # 获取exertion level标签
         exertion_level = None
         if self.labels_df is not None:
-            label_row = self.labels_df[self.labels_df['segment_id'] == session_id]
+            # 从session_id中提取基础会话名（去掉stride后缀）
+            base_session_id = session_id.split('_stride_')[0] if '_stride_' in session_id else session_id
+            
+            # 在标签文件中查找匹配的会话
+            label_row = self.labels_df[self.labels_df['Session Name'] == base_session_id]
             if not label_row.empty:
-                exertion_level = label_row['exertion_level'].iloc[0]
+                exertion_level = label_row['Exertion'].iloc[0]
         
         return {
             'session_id': session_id,
@@ -127,6 +140,8 @@ def collate_multi_feature_batch(batch):
     acoustic_tensor = to_tensor_and_pad(acoustic_features)
     mfb_tensor = to_tensor_and_pad(mfb_features)
     embed_tensor = to_tensor_and_pad(embed_features)
+    
+
     
     # 收集标签
     exertion_levels = [item['exertion_level'] for item in batch if item['exertion_level'] is not None]

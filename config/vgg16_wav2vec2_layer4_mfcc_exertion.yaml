@@ -17,7 +17,7 @@ data:
   features:
     use_mfcc: true      # 使用MFCC特征
     use_wav2vec2: true  # 使用wav2vec2特征
-    use_acoustic: false # 其他声学特征
+    use_acoustic: true  # 使用MFCC特征（通过acoustic参数加载）
   
   # wav2vec2层选择（可调整）
   wav2vec2_layers: [4]  # 可尝试其他层：[7], [4,7], [4,7,12]

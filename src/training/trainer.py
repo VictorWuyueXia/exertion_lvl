@@ -77,6 +77,18 @@ class ExertionTrainer:
         lr = self.config.get('learning_rate', 1e-4)
         weight_decay = self.config.get('weight_decay', 1e-4)
         
+        # 确保学习率和权重衰减是数值类型
+        if isinstance(lr, str):
+            try:
+                lr = float(lr)
+            except ValueError:
+                lr = 1e-4
+        if isinstance(weight_decay, str):
+            try:
+                weight_decay = float(weight_decay)
+            except ValueError:
+                weight_decay = 1e-4
+        
         if optimizer_name.lower() == 'adam':
             return optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
         elif optimizer_name.lower() == 'adamw':
@@ -118,20 +130,38 @@ class ExertionTrainer:
         else:
             raise ValueError(f"不支持的损失函数: {criterion_name}")
     
-    def train_epoch(self, model, train_loader, optimizer, criterion, scaler=None):
+    def train_epoch(self, model, train_loader, optimizer, criterion, scaler=None, epoch=None):
         """训练一个epoch"""
         model.train()
         total_loss = 0.0
         all_preds = []
         all_labels = []
         
-        pbar = tqdm(train_loader, desc="训练中")
+        epoch_desc = f"训练中 (Epoch {epoch+1})" if epoch is not None else "训练中"
+        pbar = tqdm(train_loader, desc=epoch_desc, 
+                   bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]')
         for batch_idx, batch in enumerate(pbar):
             # 获取数据
             mfb = batch.get('mfb', None)
-            mfcc = batch.get('mfcc', None)
-            wav2vec2 = batch.get('wav2vec2', None)
-            labels = batch['exertion_level'].to(self.device)
+            mfcc = batch.get('acoustic', None)  # 数据加载器返回的是'acoustic'
+            wav2vec2 = batch.get('embeds', None)  # 数据加载器返回的是'embeds'
+            labels = batch.get('exertion_levels', None)
+            
+            # 调试信息
+            if batch_idx == 0:
+                print(f"训练器调试 - 批次0:")
+                print(f"  MFCC shape: {mfcc.shape if mfcc is not None else None}")
+                print(f"  wav2vec2 shape: {wav2vec2.shape if wav2vec2 is not None else None}")
+                print(f"  batch keys: {list(batch.keys())}")
+                print(f"  use_mfcc: {self.config.get('use_mfcc', 'Not found')}")
+                print(f"  use_wav2vec2: {self.config.get('use_wav2vec2', 'Not found')}")
+            
+            # 检查标签是否为空
+            if labels is None:
+                print("警告: 批次中没有有效的标签，跳过此批次")
+                continue
+                
+            labels = labels.to(self.device)
             
             # 移动数据到设备
             if mfb is not None:
@@ -147,7 +177,7 @@ class ExertionTrainer:
             # 前向传播
             if scaler is not None:
                 with torch.cuda.amp.autocast():
-                    outputs = model(mfb=mfb, mfcc=mfcc, wav2vec2=wav2vec2)
+                    outputs = model(mfcc=mfcc, wav2vec2=wav2vec2)
                     loss = criterion(outputs, labels)
                 
                 # 反向传播
@@ -155,7 +185,7 @@ class ExertionTrainer:
                 scaler.step(optimizer)
                 scaler.update()
             else:
-                outputs = model(mfb=mfb, mfcc=mfcc, wav2vec2=wav2vec2)
+                outputs = model(mfcc=mfcc, wav2vec2=wav2vec2)
                 loss = criterion(outputs, labels)
                 
                 # 反向传播
@@ -169,9 +199,11 @@ class ExertionTrainer:
             all_labels.extend(labels.cpu().numpy())
             
             # 更新进度条
+            current_acc = accuracy_score(all_labels, all_preds)
             pbar.set_postfix({
                 'loss': f'{loss.item():.4f}',
-                'avg_loss': f'{total_loss/(batch_idx+1):.4f}'
+                'avg_loss': f'{total_loss/(batch_idx+1):.4f}',
+                'acc': f'{current_acc:.4f}'
             })
         
         # 计算指标
@@ -180,7 +212,7 @@ class ExertionTrainer:
         
         return avg_loss, accuracy
     
-    def validate_epoch(self, model, val_loader, criterion):
+    def validate_epoch(self, model, val_loader, criterion, epoch=None):
         """验证一个epoch"""
         model.eval()
         total_loss = 0.0
@@ -189,13 +221,22 @@ class ExertionTrainer:
         all_probs = []
         
         with torch.no_grad():
-            pbar = tqdm(val_loader, desc="验证中")
+            epoch_desc = f"验证中 (Epoch {epoch+1})" if epoch is not None else "验证中"
+            pbar = tqdm(val_loader, desc=epoch_desc, 
+                       bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]')
             for batch_idx, batch in enumerate(pbar):
                 # 获取数据
                 mfb = batch.get('mfb', None)
-                mfcc = batch.get('mfcc', None)
-                wav2vec2 = batch.get('wav2vec2', None)
-                labels = batch['exertion_level'].to(self.device)
+                mfcc = batch.get('acoustic', None)  # 数据加载器返回的是'acoustic'
+                wav2vec2 = batch.get('embeds', None)  # 数据加载器返回的是'embeds'
+                labels = batch.get('exertion_levels', None)
+                
+                # 检查标签是否为空
+                if labels is None:
+                    print("警告: 验证批次中没有有效的标签，跳过此批次")
+                    continue
+                    
+                labels = labels.to(self.device)
                 
                 # 移动数据到设备
                 if mfb is not None:
@@ -206,7 +247,7 @@ class ExertionTrainer:
                     wav2vec2 = wav2vec2.to(self.device)
                 
                 # 前向传播
-                outputs = model(mfb=mfb, mfcc=mfcc, wav2vec2=wav2vec2)
+                outputs = model(mfcc=mfcc, wav2vec2=wav2vec2)
                 loss = criterion(outputs, labels)
                 
                 # 统计
@@ -249,20 +290,26 @@ class ExertionTrainer:
         fold_train_history = []
         fold_val_history = []
         best_val_acc = 0.0
+        best_epoch = 0
         patience_counter = 0
         patience = self.config.get('patience', 20)
         
         for epoch in range(config['epochs']):
-            print(f"\nEpoch {epoch + 1}/{config['epochs']}")
+            print(f"\n{'='*60}")
+            print(f"Epoch {epoch + 1}/{config['epochs']} - Fold {fold_idx + 1}/5")
+            print(f"{'='*60}")
+            
+            # 记录开始时间
+            epoch_start_time = time.time()
             
             # 训练
             train_loss, train_acc = self.train_epoch(
-                model, train_loader, optimizer, criterion, scaler
+                model, train_loader, optimizer, criterion, scaler, epoch
             )
             
             # 验证
             val_loss, val_acc, val_probs, val_preds, val_labels = self.validate_epoch(
-                model, val_loader, criterion
+                model, val_loader, criterion, epoch
             )
             
             # 学习率调度
@@ -310,46 +357,102 @@ class ExertionTrainer:
                 'labels': val_labels
             })
             
-            print(f"训练 - Loss: {train_loss:.4f}, Acc: {train_acc:.4f}")
-            print(f"验证 - Loss: {val_loss:.4f}, Acc: {val_acc:.4f}")
-            print(f"学习率: {current_lr:.6f}")
+            # 计算epoch耗时
+            epoch_time = time.time() - epoch_start_time
+            
+            # 计算GPU内存使用
+            gpu_memory_used = 0
+            if torch.cuda.is_available():
+                gpu_memory_used = torch.cuda.memory_allocated(0) / 1024**3
+            
+            print(f"\nEpoch {epoch + 1} 结果:")
+            print(f"   训练 - Loss: {train_loss:.4f}, Acc: {train_acc:.4f}")
+            print(f"   验证 - Loss: {val_loss:.4f}, Acc: {val_acc:.4f}")
+            print(f"   学习率: {current_lr:.6f}")
+            print(f"   耗时: {epoch_time:.1f}秒")
+            print(f"   GPU内存: {gpu_memory_used:.2f}GB")
+            
+            # 显示改进情况
+            if epoch > 0:
+                train_improvement = train_acc - fold_train_history[-1]['accuracy']
+                val_improvement = val_acc - fold_val_history[-1]['accuracy']
+                print(f"   训练改进: {train_improvement:+.4f}")
+                print(f"   验证改进: {val_improvement:+.4f}")
+            
+            # 显示最佳记录
+            if val_acc > best_val_acc:
+                print(f"   新的最佳验证准确率: {val_acc:.4f} (之前: {best_val_acc:.4f})")
+            else:
+                print(f"   当前最佳: {best_val_acc:.4f} (还需 {patience - patience_counter} 个epoch)")
             
             # 保存最佳模型
             if val_acc > best_val_acc:
                 best_val_acc = val_acc
+                best_epoch = epoch
                 patience_counter = 0
                 
-                # 保存模型
-                model_path = os.path.join(self.result_dir, "models", f"fold_{fold_idx + 1}_best.pth")
+                # 保存最佳模型
+                best_model_path = os.path.join(self.result_dir, "models", f"fold_{fold_idx + 1}_best.pth")
                 torch.save({
                     'epoch': epoch,
                     'model_state_dict': model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
                     'val_acc': val_acc,
                     'config': config
-                }, model_path)
+                }, best_model_path)
                 
                 # 保存到WandB
-                self.wandb_manager.save_model(model, model_path, {
+                self.wandb_manager.save_model(model, best_model_path, {
                     'fold': fold_idx + 1,
                     'epoch': epoch,
-                    'val_acc': val_acc
+                    'val_acc': val_acc,
+                    'model_type': 'best'
                 })
                 
                 print(f"保存最佳模型，验证准确率: {val_acc:.4f}")
             else:
                 patience_counter += 1
             
+            # 保存最终模型（如果与最佳模型不同）
+            if epoch == config['epochs'] - 1 or patience_counter >= patience:
+                final_epoch = epoch
+                if final_epoch != best_epoch:
+                    final_model_path = os.path.join(self.result_dir, "models", f"fold_{fold_idx + 1}_final.pth")
+                    torch.save({
+                        'epoch': epoch,
+                        'model_state_dict': model.state_dict(),
+                        'optimizer_state_dict': optimizer.state_dict(),
+                        'val_acc': val_acc,
+                        'config': config
+                    }, final_model_path)
+                    
+                    # 保存到WandB
+                    self.wandb_manager.save_model(model, final_model_path, {
+                        'fold': fold_idx + 1,
+                        'epoch': epoch,
+                        'val_acc': val_acc,
+                        'model_type': 'final'
+                    })
+                    
+                    print(f"保存最终模型，验证准确率: {val_acc:.4f}")
+            
             # 早停
             if patience_counter >= patience:
                 print(f"早停触发，{patience}个epoch没有改善")
                 break
         
-        return fold_train_history, fold_val_history, best_val_acc
+        return fold_train_history, fold_val_history, best_val_acc, best_epoch, final_epoch
     
     def cross_validation_train(self, dataset, config):
         """5折交叉验证训练"""
         print("开始5折交叉验证训练")
+        print(f"总epoch数: {config['epochs']}")
+        print(f"Batch大小: {config.get('batch_size', 8)}")
+        print(f"学习率: {config.get('learning_rate', 1e-4)}")
+        print(f"设备: {self.device}")
+        if torch.cuda.is_available():
+            print(f"GPU: {torch.cuda.get_device_name(0)}")
+        print("="*60)
         
         # 准备数据
         all_sessions = dataset.metadata_df['session'].tolist()
@@ -384,7 +487,7 @@ class ExertionTrainer:
             model = model.to(self.device)
             
             # 训练
-            train_history, val_history, best_acc = self.train_fold(
+            train_history, val_history, best_acc, best_epoch, final_epoch = self.train_fold(
                 fold_idx, train_loader, val_loader, model, config
             )
             
@@ -392,7 +495,9 @@ class ExertionTrainer:
                 'fold': fold_idx + 1,
                 'train_history': train_history,
                 'val_history': val_history,
-                'best_acc': best_acc
+                'best_acc': best_acc,
+                'best_epoch': best_epoch,
+                'final_epoch': final_epoch
             })
             
             print(f"Fold {fold_idx + 1} 完成，最佳验证准确率: {best_acc:.4f}")
@@ -402,6 +507,9 @@ class ExertionTrainer:
         
         # 记录最终结果到WandB
         self._log_final_results(fold_results)
+        
+        # 测试最佳和最终模型
+        test_results = self.test_best_and_final_models(fold_results, dataset, config)
         
         return fold_results
     
@@ -516,6 +624,81 @@ class ExertionTrainer:
             
         except Exception as e:
             print(f"记录最终结果到WandB时出错: {e}")
+    
+    def test_best_and_final_models(self, fold_results, dataset, config):
+        """测试验证最佳epoch和最终epoch的模型"""
+        print("\n开始测试最佳和最终模型...")
+        
+        test_results = {}
+        
+        for fold_result in fold_results:
+            fold_idx = fold_result['fold']
+            best_epoch = fold_result['best_epoch']
+            final_epoch = fold_result['final_epoch']
+            
+            print(f"\nFold {fold_idx}:")
+            print(f"  最佳epoch: {best_epoch + 1}")
+            print(f"  最终epoch: {final_epoch + 1}")
+            
+            # 测试最佳模型
+            best_model_path = os.path.join(self.result_dir, "models", f"fold_{fold_idx}_best.pth")
+            if os.path.exists(best_model_path):
+                best_acc = self._test_single_model(best_model_path, dataset, config, f"最佳模型 (Epoch {best_epoch + 1})")
+                test_results[f'fold_{fold_idx}_best'] = best_acc
+            else:
+                print(f"  最佳模型文件不存在: {best_model_path}")
+            
+            # 测试最终模型（如果与最佳模型不同）
+            if best_epoch != final_epoch:
+                final_model_path = os.path.join(self.result_dir, "models", f"fold_{fold_idx}_final.pth")
+                if os.path.exists(final_model_path):
+                    final_acc = self._test_single_model(final_model_path, dataset, config, f"最终模型 (Epoch {final_epoch + 1})")
+                    test_results[f'fold_{fold_idx}_final'] = final_acc
+                    
+                    # 比较结果
+                    improvement = best_acc - final_acc
+                    print(f"  最佳模型 vs 最终模型: {improvement:+.4f}")
+                else:
+                    print(f"  最终模型文件不存在: {final_model_path}")
+            else:
+                print(f"  最佳模型和最终模型相同，跳过最终模型测试")
+        
+        # 保存测试结果
+        test_results_path = os.path.join(self.result_dir, "model_test_results.json")
+        with open(test_results_path, 'w', encoding='utf-8') as f:
+            import json
+            json.dump(test_results, f, indent=2, ensure_ascii=False)
+        
+        print(f"\n模型测试结果已保存到: {test_results_path}")
+        return test_results
+    
+    def _test_single_model(self, model_path, dataset, config, model_name):
+        """测试单个模型"""
+        try:
+            # 加载模型
+            checkpoint = torch.load(model_path, map_location=self.device)
+            model = self._create_model(config)
+            model.load_state_dict(checkpoint['model_state_dict'])
+            model.to(self.device)
+            model.eval()
+            
+            # 创建测试数据加载器（使用验证集）
+            all_sessions = dataset.metadata_df['session'].tolist()
+            test_sessions = all_sessions[:len(all_sessions)//5]  # 使用20%的数据作为测试集
+            
+            test_loader = self._create_dataloader(dataset, test_sessions, config, shuffle=False)
+            
+            # 测试
+            criterion = self._get_criterion()
+            test_loss, test_acc, _, _, _ = self.validate_epoch(model, test_loader, criterion)
+            
+            print(f"  {model_name} - Loss: {test_loss:.4f}, Acc: {test_acc:.4f}")
+            
+            return test_acc
+            
+        except Exception as e:
+            print(f"  测试{model_name}时出错: {e}")
+            return 0.0
 
 
 class FocalLoss(nn.Module):
