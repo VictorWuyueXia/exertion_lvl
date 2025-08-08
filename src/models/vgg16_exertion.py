@@ -12,14 +12,17 @@ class VGG16ExertionModel(nn.Module):
     def __init__(self, 
                  mfcc_dim=40,  # 修正为实际的MFCC维度
                  wav2vec2_dim=768,
+                 mfb_dim=40,   # MFB特征维度
                  num_classes=5,
                  dropout_rate=0.5,
                  use_mfcc=True,
-                 use_wav2vec2=True):
+                 use_wav2vec2=True,
+                 use_mfb=False):
         super(VGG16ExertionModel, self).__init__()
         
         self.use_mfcc = use_mfcc
         self.use_wav2vec2 = use_wav2vec2
+        self.use_mfb = use_mfb
         self.num_classes = num_classes
         
         # 计算输入维度
@@ -28,6 +31,8 @@ class VGG16ExertionModel(nn.Module):
             input_dim += mfcc_dim
         if use_wav2vec2:
             input_dim += wav2vec2_dim
+        if use_mfb:
+            input_dim += mfb_dim
             
         self.input_dim = input_dim
         self.dropout_rate = dropout_rate
@@ -101,12 +106,13 @@ class VGG16ExertionModel(nn.Module):
                     else:
                         nn.init.constant_(m.bias, 0)
     
-    def forward(self, mfcc=None, wav2vec2=None):
+    def forward(self, mfcc=None, wav2vec2=None, mfb=None):
         """
         前向传播
         Args:
             mfcc: MFCC特征 (batch_size, time_steps, mfcc_dim)
             wav2vec2: wav2vec2特征 (batch_size, time_steps, wav2vec2_dim)
+            mfb: MFB特征 (batch_size, time_steps, mfb_dim)
         """
         # 特征融合
         features_list = []
@@ -118,6 +124,9 @@ class VGG16ExertionModel(nn.Module):
         if self.use_wav2vec2 and wav2vec2 is not None:
             features_list.append(wav2vec2)
             current_input_dim += wav2vec2.shape[-1]
+        if self.use_mfb and mfb is not None:
+            features_list.append(mfb)
+            current_input_dim += mfb.shape[-1]
         
         if not features_list:
             raise ValueError("至少需要一种特征输入")
@@ -199,10 +208,12 @@ def create_model(config):
     model_config = {
         'mfcc_dim': config.get('mfcc_dim', 40),  # 实际MFCC维度
         'wav2vec2_dim': config.get('wav2vec2_dim', 768),
+        'mfb_dim': config.get('mfb_dim', 40),    # MFB特征维度
         'num_classes': config.get('num_classes', 5),  # 5个类别（0,1,2,3,4）
         'dropout_rate': config.get('dropout_rate', 0.5),
         'use_mfcc': config.get('use_mfcc', True),
         'use_wav2vec2': config.get('use_wav2vec2', True),
+        'use_mfb': config.get('use_mfb', False),
     }
     
     if config.get('optimize_for_rtx4070', True):

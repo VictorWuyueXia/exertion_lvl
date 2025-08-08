@@ -183,7 +183,7 @@ class ExertionTrainer:
             # 前向传播
             if scaler is not None:
                 with torch.cuda.amp.autocast():
-                    outputs = model(mfcc=mfcc, wav2vec2=wav2vec2)
+                    outputs = model(mfcc=mfcc, wav2vec2=wav2vec2, mfb=mfb)
                     loss = criterion(outputs, labels)
                 
                 # 反向传播
@@ -196,7 +196,7 @@ class ExertionTrainer:
                 scaler.step(optimizer)
                 scaler.update()
             else:
-                outputs = model(mfcc=mfcc, wav2vec2=wav2vec2)
+                outputs = model(mfcc=mfcc, wav2vec2=wav2vec2, mfb=mfb)
                 loss = criterion(outputs, labels)
                 
                 # 反向传播
@@ -263,7 +263,7 @@ class ExertionTrainer:
                     wav2vec2 = wav2vec2.to(self.device)
                 
                 # 前向传播
-                outputs = model(mfcc=mfcc, wav2vec2=wav2vec2)
+                outputs = model(mfcc=mfcc, wav2vec2=wav2vec2, mfb=mfb)
                 loss = criterion(outputs, labels)
                 
                 # 统计
@@ -312,7 +312,8 @@ class ExertionTrainer:
         
         for epoch in range(config.get('training', {}).get('epochs', 15)):
             print(f"\n{'='*60}")
-            print(f"Epoch {epoch + 1}/{config.get('training', {}).get('epochs', 15)} - Fold {fold_idx + 1}/5")
+            n_folds = config.get('training', {}).get('n_folds', 1)
+            print(f"Epoch {epoch + 1}/{config.get('training', {}).get('epochs', 15)} - Fold {fold_idx + 1}/{n_folds}")
             print(f"{'='*60}")
             
             # 记录开始时间
@@ -728,7 +729,7 @@ class ExertionTrainer:
             feature_dir=self._get_config_value(config, 'feature_dir'),
             labels_df=dataset.labels_df,
             use_acoustic=self._get_config_value(config, 'use_mfcc', True),
-            use_mfb=self._get_config_value(config, 'use_mfb', True),
+            use_mfb=self._get_config_value(config, 'use_mfb', False),
             use_embed=self._get_config_value(config, 'use_wav2vec2', True),
             selected_wav2vec2_layers=self._get_config_value(config, 'wav2vec2_layers', [4]),
             batch_size=config.get('training', {}).get('batch_size', 32),

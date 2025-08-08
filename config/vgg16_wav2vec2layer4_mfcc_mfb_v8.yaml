@@ -1,5 +1,5 @@
-# 运动强度检测模型训练配置文件（V7版本）
-# 使用基于clip的分层分割，完全禁用数据平衡
+# 运动强度检测模型训练配置文件（V8版本）
+# 启用MFB特征，使用Focal Loss，50个epoch，5个patience
 
 # ==================== 数据配置 ====================
 data:
@@ -16,7 +16,7 @@ data:
   
   # 特征选择
   features:
-    use_mfb: false      # 禁用MFB特征（当前配置）
+    use_mfb: true       # 启用MFB特征
     use_wav2vec2: true  # 使用wav2vec2特征
     use_mfcc: true      # 使用MFCC特征
   
@@ -43,6 +43,7 @@ model:
   # 特征维度配置（根据实际数据调整）
   mfcc_dim: 40          # 实际MFCC维度
   wav2vec2_dim: 768     # wav2vec2特征维度
+  mfb_dim: 40           # MFB特征维度
   num_classes: 5        # 分类数量（标签0,1,2,3,4，全流程5个类别）
   dropout_rate: 0.6     # 增加Dropout率以加强正则化
 
@@ -108,7 +109,7 @@ output:
 # ==================== 实验配置 ====================
 experiment:
   # 实验名称
-  name: "VGG16_wav2vec2_layer4_exertion_detection_v7"
+  name: "VGG16_wav2vec2_layer4_mfcc_mfb_exertion_detection_v8"
   
   # 实验描述
-  description: "基于VGG16和wav2vec2第4层的运动强度检测模型（V7版本：基于clip的分层分割，完全禁用数据平衡，修复配置读取）"
+  description: "基于VGG16和wav2vec2第4层的运动强度检测模型（V8版本：启用MFB特征，使用Focal Loss，50个epoch，5个patience）"
