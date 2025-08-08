@@ -88,6 +88,14 @@ data/*
 wandb/
 test/
 
+# Results and outputs
+result/
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.pdf
+
 # IDE
 .vscode/
 .idea/

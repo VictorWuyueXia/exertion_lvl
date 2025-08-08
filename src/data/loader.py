@@ -281,6 +281,78 @@ def split_train_test_val(df, test_size=0.15, val_size=0.15, random_state=42):
     
     return train_sessions, val_sessions, test_sessions
 
+def split_train_test_val_stratified(df, labels_df, test_size=0.15, val_size=0.15, random_state=42):
+    """
+    将数据分割为训练集、验证集和测试集
+    使用分层分割确保每个集合都包含所有标签类别
+    基于clip级别分割，确保同一个clip不重复出现
+    """
+    from sklearn.model_selection import train_test_split
+    import numpy as np
+    from collections import defaultdict
+    
+    # 按类别分组clips
+    class_clips = defaultdict(list)
+    
+    # 为每个clip分配标签，不同stride的clip作为独立数据点
+    for _, row in df.iterrows():
+        session_id = row['session']
+        base_session_id = session_id.split('_stride_')[0] if '_stride_' in session_id else session_id
+        
+        # 获取标签
+        label_row = labels_df[labels_df['Session Name'] == base_session_id]
+        if not label_row.empty:
+            exertion_level = label_row['Exertion'].iloc[0] - 1  # 转换为0-4
+            class_clips[exertion_level].append(session_id)
+    
+    train_sessions = []
+    val_sessions = []
+    test_sessions = []
+    
+    # 对每个类别单独进行分割
+    for class_id in range(5):  # 0-4类别
+        if class_id not in class_clips or len(class_clips[class_id]) == 0:
+            print(f"警告: 类别 {class_id} 没有clips")
+            continue
+            
+        clips = class_clips[class_id]
+        print(f"类别 {class_id}: {len(clips)} 个clips")
+        
+        # 确保每个类别至少有3个clips（训练、验证、测试各至少1个）
+        if len(clips) < 3:
+            print(f"警告: 类别 {class_id} clips太少 ({len(clips)})，无法保证每个集合都有代表")
+            # 将所有clips分配给训练集
+            train_sessions.extend(clips)
+            continue
+        
+        # 计算分割数量
+        n_test = max(1, int(len(clips) * test_size))
+        n_val = max(1, int(len(clips) * val_size))
+        n_train = len(clips) - n_test - n_val
+        
+        # 确保训练集至少有1个clip
+        if n_train < 1:
+            n_train = 1
+            n_val = max(1, len(clips) - n_test - n_train)
+        
+        # 随机打乱clips
+        np.random.seed(random_state + class_id)  # 为每个类别使用不同的种子
+        np.random.shuffle(clips)
+        
+        # 分割clips
+        train_clips = clips[:n_train]
+        val_clips = clips[n_train:n_train + n_val]
+        test_clips = clips[n_train + n_val:]
+        
+        # 添加clips到对应集合
+        train_sessions.extend(train_clips)
+        val_sessions.extend(val_clips)
+        test_sessions.extend(test_clips)
+        
+        print(f"  类别 {class_id} 分割: 训练={len(train_clips)}, 验证={len(val_clips)}, 测试={len(test_clips)}")
+    
+    return train_sessions, val_sessions, test_sessions
+
 
 # 示例使用
 if __name__ == "__main__":

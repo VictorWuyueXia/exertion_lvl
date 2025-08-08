@@ -21,10 +21,10 @@ data:
     use_mfcc: true  # 使用MFCC特征
   
   # 数据平衡
-  balance_data: true   # 启用数据平衡
+  balance_data: false   # 禁用数据平衡，保持原始数据分布
   balance_config:
-    target_samples_per_class: 600  # 进一步减少目标样本数
-    max_oversampling_ratio: 2.0    # 增加过采样比例以确保类别4有足够样本
+    target_samples_per_class: null  # 不设置目标样本数
+    max_oversampling_ratio: 1.0    # 不过采样
   
   # 数据标准化
   normalize_data: true  # 启用数据标准化

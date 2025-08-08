@@ -560,13 +560,28 @@ class ExertionTrainer:
             print(f"  训练集大小: {1-val_size-test_size}")
             print(f"  随机种子: {random_state}")
             
-            # 使用基于参与者的分割
-            train_sessions, val_sessions, test_sessions = split_train_test_val(
-                dataset.metadata_df, 
-                test_size=test_size, 
-                val_size=val_size, 
-                random_state=random_state
-            )
+            # 检查是否使用分层分割
+            use_stratified_split = config.get('data', {}).get('split', {}).get('use_stratified_split', False)
+            
+            if use_stratified_split:
+                print("使用分层分割确保所有类别都有代表...")
+                from src.data.loader import split_train_test_val_stratified
+                train_sessions, val_sessions, test_sessions = split_train_test_val_stratified(
+                    dataset.metadata_df, 
+                    dataset.labels_df,
+                    test_size=test_size, 
+                    val_size=val_size, 
+                    random_state=random_state
+                )
+            else:
+                print("使用基于参与者的分割...")
+                from src.data.loader import split_train_test_val
+                train_sessions, val_sessions, test_sessions = split_train_test_val(
+                    dataset.metadata_df, 
+                    test_size=test_size, 
+                    val_size=val_size, 
+                    random_state=random_state
+                )
             
             # 转换为索引
             session_to_idx = {session: idx for idx, session in enumerate(all_sessions)}
