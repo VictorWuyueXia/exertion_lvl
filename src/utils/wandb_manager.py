@@ -105,14 +105,44 @@ class WandBManager:
             
             time.sleep(1)
     
+    def _print_metrics_to_terminal(self, metric_type: str, metrics: Dict[str, float], step: Optional[int] = None):
+        """在终端打印格式化的指标信息"""
+        if not self.enabled:
+            return
+        
+        # 格式化指标显示
+        metric_str = ", ".join([f"{k}: {v:.4f}" for k, v in metrics.items()])
+        step_info = f" (Step: {step})" if step is not None else ""
+        
+        # 使用颜色编码（如果支持）
+        try:
+            from colorama import init, Fore, Style
+            init()
+            
+            if metric_type == "训练":
+                color = Fore.GREEN
+            elif metric_type == "验证":
+                color = Fore.BLUE
+            else:
+                color = Fore.YELLOW
+                
+            print(f"{color}[WandB {metric_type}]{Style.RESET_ALL} {metric_str}{step_info}")
+            
+        except ImportError:
+            # 如果没有colorama，使用普通输出
+            print(f"[WandB {metric_type}] {metric_str}{step_info}")
+    
     def _log_gpu_metrics(self):
         """记录GPU指标"""
         if not torch.cuda.is_available():
             return
         
         try:
-            # GPU使用率
-            gpu_utilization = torch.cuda.utilization(0)
+            # GPU使用率（兼容性处理）
+            try:
+                gpu_utilization = torch.cuda.utilization(0)
+            except:
+                gpu_utilization = 0  # 如果不可用，设为0
             
             # GPU内存使用
             gpu_memory_allocated = torch.cuda.memory_allocated(0) / 1024**3  # GB
@@ -141,8 +171,22 @@ class WandBManager:
             
             wandb.log(metrics, step=wandb.run.step if wandb.run else None)
             
+            # 终端显示GPU信息（每5次记录一次，避免过于频繁）
+            if hasattr(self, '_gpu_log_count'):
+                self._gpu_log_count += 1
+            else:
+                self._gpu_log_count = 1
+            
+            if self._gpu_log_count % 5 == 0:
+                gpu_info = f"GPU使用率: {gpu_utilization}%, 内存: {gpu_memory_allocated:.2f}GB/{gpu_memory_total:.2f}GB"
+                if gpu_temp is not None:
+                    gpu_info += f", 温度: {gpu_temp}°C"
+                print(f"[WandB GPU监控] {gpu_info}")
+            
         except Exception as e:
-            print(f"GPU监控错误: {e}")
+            # 忽略Broken pipe错误，这通常是因为WandB连接中断
+            if "Broken pipe" not in str(e):
+                print(f"GPU监控错误: {e}")
     
     def _log_system_metrics(self):
         """记录系统指标"""
@@ -175,7 +219,9 @@ class WandBManager:
             wandb.log(metrics, step=wandb.run.step if wandb.run else None)
             
         except Exception as e:
-            print(f"系统监控错误: {e}")
+            # 忽略Broken pipe错误，这通常是因为WandB连接中断
+            if "Broken pipe" not in str(e):
+                print(f"系统监控错误: {e}")
     
     def log_training_metrics(self, metrics: Dict[str, float], step: Optional[int] = None):
         """记录训练指标"""
@@ -190,6 +236,9 @@ class WandBManager:
             # 保存到历史记录
             for k, v in metrics.items():
                 self.metrics_history[f'train_{k}'].append(v)
+            
+            # 增强终端显示
+            self._print_metrics_to_terminal("训练", metrics, step)
                 
         except Exception as e:
             print(f"训练指标记录错误: {e}")
@@ -207,6 +256,9 @@ class WandBManager:
             # 保存到历史记录
             for k, v in metrics.items():
                 self.metrics_history[f'val_{k}'].append(v)
+            
+            # 增强终端显示
+            self._print_metrics_to_terminal("验证", metrics, step)
                 
         except Exception as e:
             print(f"验证指标记录错误: {e}")

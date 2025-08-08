@@ -223,8 +223,8 @@ class TestExertionTrainer(unittest.TestCase):
         num_samples = 16
         
         # 创建模拟数据
-        mfcc_data = torch.randn(num_samples, self.config['mfcc_dim'], seq_len)
-        wav2vec2_data = torch.randn(num_samples, self.config['wav2vec2_dim'], seq_len)
+        mfcc_data = torch.randn(num_samples, seq_len, self.config['mfcc_dim'])
+        wav2vec2_data = torch.randn(num_samples, seq_len, self.config['wav2vec2_dim'])
         labels = torch.randint(0, self.config['num_classes'], (num_samples,))
         
         dataset = TensorDataset(mfcc_data, wav2vec2_data, labels)
@@ -260,8 +260,8 @@ class TestExertionTrainer(unittest.TestCase):
         num_samples = 12
         
         # 创建模拟数据
-        mfcc_data = torch.randn(num_samples, self.config['mfcc_dim'], seq_len)
-        wav2vec2_data = torch.randn(num_samples, self.config['wav2vec2_dim'], seq_len)
+        mfcc_data = torch.randn(num_samples, seq_len, self.config['mfcc_dim'])
+        wav2vec2_data = torch.randn(num_samples, seq_len, self.config['wav2vec2_dim'])
         labels = torch.randint(0, self.config['num_classes'], (num_samples,))
         
         dataset = TensorDataset(mfcc_data, wav2vec2_data, labels)
@@ -355,8 +355,8 @@ class TestExertionTrainer(unittest.TestCase):
         seq_len = 100
         num_samples = 16
         
-        mfcc_data = torch.randn(num_samples, self.config['mfcc_dim'], seq_len)
-        wav2vec2_data = torch.randn(num_samples, self.config['wav2vec2_dim'], seq_len)
+        mfcc_data = torch.randn(num_samples, seq_len, self.config['mfcc_dim'])
+        wav2vec2_data = torch.randn(num_samples, seq_len, self.config['wav2vec2_dim'])
         labels = torch.randint(0, self.config['num_classes'], (num_samples,))
         
         # 模拟数据加载器的迭代
@@ -510,8 +510,8 @@ class TestTrainingIntegration(unittest.TestCase):
         seq_len = 50
         num_samples = 8
         
-        mfcc_data = torch.randn(num_samples, self.config['mfcc_dim'], seq_len)
-        wav2vec2_data = torch.randn(num_samples, self.config['wav2vec2_dim'], seq_len)
+        mfcc_data = torch.randn(num_samples, seq_len, self.config['mfcc_dim'])
+        wav2vec2_data = torch.randn(num_samples, seq_len, self.config['wav2vec2_dim'])
         labels = torch.randint(0, self.config['num_classes'], (num_samples,))
         
         # 模拟数据加载器的迭代

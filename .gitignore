@@ -84,6 +84,10 @@ data/*
 !data/general_information.csv
 !data/data_README.md
 
+# WandB and test directories
+wandb/
+test/
+
 # IDE
 .vscode/
 .idea/

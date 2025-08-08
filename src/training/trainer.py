@@ -141,6 +141,11 @@ class ExertionTrainer:
         pbar = tqdm(train_loader, desc=epoch_desc, 
                    bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]')
         for batch_idx, batch in enumerate(pbar):
+            # 检查批次是否有效
+            if batch is None:
+                print("警告: 收到无效批次，跳过")
+                continue
+                
             # 获取数据
             mfb = batch.get('mfb', None)
             mfcc = batch.get('acoustic', None)  # 数据加载器返回的是'acoustic'
@@ -182,6 +187,11 @@ class ExertionTrainer:
                 
                 # 反向传播
                 scaler.scale(loss).backward()
+                
+                # 梯度裁剪
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                
                 scaler.step(optimizer)
                 scaler.update()
             else:
@@ -190,11 +200,16 @@ class ExertionTrainer:
                 
                 # 反向传播
                 loss.backward()
+                
+                # 梯度裁剪
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                
                 optimizer.step()
             
             # 统计
             total_loss += loss.item()
-            preds = torch.argmax(outputs, dim=1)
+            probs = torch.softmax(outputs, dim=1)
+            preds = torch.argmax(probs, dim=1)
             all_preds.extend(preds.cpu().numpy())
             all_labels.extend(labels.cpu().numpy())
             
@@ -253,7 +268,7 @@ class ExertionTrainer:
                 # 统计
                 total_loss += loss.item()
                 probs = torch.softmax(outputs, dim=1)
-                preds = torch.argmax(outputs, dim=1)
+                preds = torch.argmax(probs, dim=1)
                 
                 all_probs.extend(probs.cpu().numpy())
                 all_preds.extend(preds.cpu().numpy())
@@ -444,8 +459,15 @@ class ExertionTrainer:
         return fold_train_history, fold_val_history, best_val_acc, best_epoch, final_epoch
     
     def cross_validation_train(self, dataset, config):
-        """5折交叉验证训练"""
-        print("开始5折交叉验证训练")
+        """交叉验证训练（支持单Fold）"""
+        n_folds = config.get('n_folds')
+        if n_folds is None:
+            raise ValueError("配置文件中必须指定 'n_folds' 参数")
+            
+        if n_folds == 1:
+            print("开始单Fold训练")
+        else:
+            print(f"开始{n_folds}折交叉验证训练")
         print(f"总epoch数: {config['epochs']}")
         print(f"Batch大小: {config.get('batch_size', 8)}")
         print(f"学习率: {config.get('learning_rate', 1e-4)}")
@@ -454,25 +476,86 @@ class ExertionTrainer:
             print(f"GPU: {torch.cuda.get_device_name(0)}")
         print("="*60)
         
+        # 数据平衡
+        if config.get('balance_data', True):
+            print("\n应用数据平衡...")
+            from src.data.balancer import balance_audio_dataset
+            
+            balanced_metadata_df = balance_audio_dataset(
+                dataset.metadata_df,
+                dataset.labels_df,
+                config['feature_dir'],
+                target_samples_per_class=1500,  # 每个类别1500个样本
+                random_seed=config.get('system', {}).get('seed', 42),
+                ignore_classes=[4]  # 忽略类别4
+            )
+            
+            # 创建平衡后的数据集
+            from src.data.loader import AudioFeatureDataset
+            balanced_dataset = AudioFeatureDataset(
+                metadata_df=balanced_metadata_df,
+                feature_dir=config['feature_dir'],
+                labels_df=dataset.labels_df,
+                use_acoustic=config.get('use_mfcc', True),
+                use_mfb=config.get('use_mfb', False),
+                use_embed=config.get('use_wav2vec2', True),
+                selected_wav2vec2_layers=config.get('wav2vec2_layers', [4])
+            )
+            
+            dataset = balanced_dataset
+        
         # 准备数据
         all_sessions = dataset.metadata_df['session'].tolist()
         all_labels = []
         
         for session in all_sessions:
-            label_row = dataset.labels_df[dataset.labels_df['segment_id'] == session]
+            # 修复标签匹配逻辑
+            base_session_id = session.split('_stride_')[0] if '_stride_' in session else session
+            label_row = dataset.labels_df[dataset.labels_df['Session Name'] == base_session_id]
             if not label_row.empty:
-                all_labels.append(label_row.iloc[0]['exertion_level'])
+                all_labels.append(label_row.iloc[0]['Exertion'] - 1)  # 转换为0-4
             else:
                 all_labels.append(0)  # 默认标签
         
-        # 5折交叉验证
-        skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=config.get('seed', 42))
+        # 交叉验证设置
+        n_folds = config.get('n_folds')
+        if n_folds is None:
+            raise ValueError("配置文件中必须指定 'n_folds' 参数")
+            
+        if n_folds == 1:
+            # 单Fold训练：使用配置文件中的验证集大小
+            from sklearn.model_selection import train_test_split
+            
+            # 从配置文件中获取验证集大小
+            val_size = config.get('data', {}).get('split', {}).get('val_size', 0.1)
+            random_state = config.get('system', {}).get('seed', 42)
+            
+            print(f"单Fold训练配置:")
+            print(f"  验证集大小: {val_size}")
+            print(f"  训练集大小: {1-val_size}")
+            print(f"  随机种子: {random_state}")
+            
+            train_idx, val_idx = train_test_split(
+                range(len(all_sessions)), 
+                test_size=val_size, 
+                random_state=random_state,
+                stratify=all_labels
+            )
+            fold_splits = [(train_idx, val_idx)]
+        else:
+            # 多Fold交叉验证
+            random_state = config.get('system', {}).get('seed', 42)
+            skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=random_state)
+            fold_splits = list(skf.split(all_sessions, all_labels))
         
         fold_results = []
         
-        for fold_idx, (train_idx, val_idx) in enumerate(skf.split(all_sessions, all_labels)):
+        for fold_idx, (train_idx, val_idx) in enumerate(fold_splits):
             print(f"\n{'='*50}")
-            print(f"Fold {fold_idx + 1}/5")
+            if n_folds == 1:
+                print("单Fold训练")
+            else:
+                print(f"Fold {fold_idx + 1}/{n_folds}")
             print(f"{'='*50}")
             
             # 创建数据加载器
@@ -500,7 +583,10 @@ class ExertionTrainer:
                 'final_epoch': final_epoch
             })
             
-            print(f"Fold {fold_idx + 1} 完成，最佳验证准确率: {best_acc:.4f}")
+            if n_folds == 1:
+                print(f"单Fold训练完成，最佳验证准确率: {best_acc:.4f}")
+            else:
+                print(f"Fold {fold_idx + 1} 完成，最佳验证准确率: {best_acc:.4f}")
         
         # 保存结果
         self._save_cv_results(fold_results)
@@ -532,16 +618,34 @@ class ExertionTrainer:
             use_mfb=config.get('use_mfb', True),
             use_embed=config.get('use_wav2vec2', True),
             selected_wav2vec2_layers=config.get('wav2vec2_layers', [4]),
-            batch_size=config.get('batch_size', 8),
+            batch_size=config.get('batch_size'),
             shuffle=shuffle,
-            num_workers=config.get('num_workers', 4),
-            pin_memory=True
+            num_workers=config.get('num_workers'),
+            pin_memory=config.get('pin_memory'),
+            persistent_workers=config.get('persistent_workers'),
+            prefetch_factor=config.get('prefetch_factor')
         )
     
     def _create_model(self, config):
         """创建模型"""
         from src.models.vgg16_exertion import create_model
-        return create_model(config)
+        
+        # 如果config中没有模型配置，使用默认值
+        if 'mfcc_dim' not in config:
+            model_config = {
+                'mfcc_dim': 40,  # 实际MFCC维度
+                'wav2vec2_dim': 768,
+                'num_classes': 5,  # 1-5级，共5个类别
+                'dropout_rate': 0.5,
+                'use_mfcc': config.get('use_acoustic', True),
+                'use_wav2vec2': config.get('use_wav2vec2', True),
+                'optimize_for_rtx4070': True,
+            }
+        else:
+            model_config = config
+        
+
+        return create_model(model_config)
     
     def _save_cv_results(self, fold_results):
         """保存交叉验证结果"""
@@ -560,12 +664,12 @@ class ExertionTrainer:
             
             for val_epoch in fold_result['val_history']:
                 serializable_val_epoch = {
-                    'epoch': val_epoch['epoch'],
-                    'loss': val_epoch['loss'],
-                    'accuracy': val_epoch['accuracy'],
+                    'epoch': int(val_epoch['epoch']),
+                    'loss': float(val_epoch['loss']),
+                    'accuracy': float(val_epoch['accuracy']),
                     'probs': [prob.tolist() for prob in val_epoch['probs']],
-                    'preds': val_epoch['preds'],
-                    'labels': val_epoch['labels']
+                    'preds': [int(p) for p in val_epoch['preds']],
+                    'labels': [int(l) for l in val_epoch['labels']]
                 }
                 serializable_fold['val_history'].append(serializable_val_epoch)
             
@@ -678,7 +782,16 @@ class ExertionTrainer:
             # 加载模型
             checkpoint = torch.load(model_path, map_location=self.device)
             model = self._create_model(config)
-            model.load_state_dict(checkpoint['model_state_dict'])
+            
+            # 兼容不同的保存格式
+            if 'model_state_dict' in checkpoint:
+                model.load_state_dict(checkpoint['model_state_dict'])
+            elif 'state_dict' in checkpoint:
+                model.load_state_dict(checkpoint['state_dict'])
+            else:
+                # 直接加载状态字典
+                model.load_state_dict(checkpoint)
+                
             model.to(self.device)
             model.eval()
             

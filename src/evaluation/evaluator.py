@@ -110,21 +110,33 @@ class ExertionEvaluator:
         
         # 每个类别的指标
         class_metrics = {}
-        for i in range(self.config.get('num_classes', 5)):
-            if i in labels:
-                class_metrics[f'class_{i}'] = {
-                    'precision': precision_score(labels, preds, average=None)[i],
-                    'recall': recall_score(labels, preds, average=None)[i],
-                    'f1': f1_score(labels, preds, average=None)[i]
-                }
+        num_classes = self.config.get('num_classes', 5)
+        
+        # 计算所有类别的指标（包括未出现的类别）
+        precision_scores = precision_score(labels, preds, average=None, zero_division=0, labels=range(num_classes))
+        recall_scores = recall_score(labels, preds, average=None, zero_division=0, labels=range(num_classes))
+        f1_scores = f1_score(labels, preds, average=None, zero_division=0, labels=range(num_classes))
+        
+        for i in range(num_classes):
+            class_metrics[f'class_{i}'] = {
+                'precision': float(precision_scores[i]),
+                'recall': float(recall_scores[i]),
+                'f1': float(f1_scores[i])
+            }
         
         # AUC指标（多分类）
         try:
             if probs.shape[1] == 2:  # 二分类
                 auc = roc_auc_score(labels, probs[:, 1])
             else:  # 多分类
-                auc = roc_auc_score(labels, probs, multi_class='ovr', average='macro')
-        except:
+                # 使用所有类别计算AUC
+                num_classes = self.config.get('num_classes', 5)
+                if num_classes >= 2:
+                    auc = roc_auc_score(labels, probs, multi_class='ovr', average='macro')
+                else:
+                    auc = None
+        except Exception as e:
+            print(f"AUC calculation failed: {e}")
             auc = None
         
         # 混淆矩阵
@@ -176,16 +188,17 @@ class ExertionEvaluator:
         self._plot_class_accuracy(labels, preds, fold_idx)
     
     def _plot_confusion_matrix(self, labels, preds, fold_idx=None):
-        """绘制混淆矩阵"""
-        cm = confusion_matrix(labels, preds)
+        """Plot confusion matrix"""
+        num_classes = self.config.get('num_classes', 5)
+        cm = confusion_matrix(labels, preds, labels=range(num_classes))
         
         plt.figure(figsize=(10, 8))
         sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
-                   xticklabels=range(self.config.get('num_classes', 5)),
-                   yticklabels=range(self.config.get('num_classes', 5)))
-        plt.title(f'混淆矩阵{f" (Fold {fold_idx})" if fold_idx is not None else ""}')
-        plt.xlabel('预测标签')
-        plt.ylabel('真实标签')
+                   xticklabels=range(num_classes),
+                   yticklabels=range(num_classes))
+        plt.title(f'Confusion Matrix{f" (Fold {fold_idx})" if fold_idx is not None else ""}')
+        plt.xlabel('Predicted Label')
+        plt.ylabel('True Label')
         
         if fold_idx is not None:
             save_path = os.path.join(self.eval_dir, f"fold_{fold_idx}_confusion_matrix.png")
@@ -196,25 +209,25 @@ class ExertionEvaluator:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         plt.close()
         
-        print(f"混淆矩阵已保存到: {save_path}")
+        print(f"Confusion matrix saved to: {save_path}")
     
     def _plot_multiclass_roc(self, labels, probs, fold_idx=None):
-        """绘制多分类ROC曲线"""
+        """Plot multi-class ROC curve"""
         n_classes = probs.shape[1]
         
         plt.figure(figsize=(10, 8))
         
         for i in range(n_classes):
-            # 计算每个类别的ROC
+            # Calculate ROC for each class
             fpr, tpr, _ = roc_curve((labels == i).astype(int), probs[:, i])
             auc = roc_auc_score((labels == i).astype(int), probs[:, i])
             
-            plt.plot(fpr, tpr, label=f'类别 {i} (AUC = {auc:.3f})')
+            plt.plot(fpr, tpr, label=f'Class {i} (AUC = {auc:.3f})')
         
-        plt.plot([0, 1], [0, 1], 'k--', label='随机分类器')
-        plt.xlabel('假正率 (FPR)')
-        plt.ylabel('真正率 (TPR)')
-        plt.title(f'多分类ROC曲线{f" (Fold {fold_idx})" if fold_idx is not None else ""}')
+        plt.plot([0, 1], [0, 1], 'k--', label='Random Classifier')
+        plt.xlabel('False Positive Rate (FPR)')
+        plt.ylabel('True Positive Rate (TPR)')
+        plt.title(f'Multi-class ROC Curve{f" (Fold {fold_idx})" if fold_idx is not None else ""}')
         plt.legend()
         plt.grid(True, alpha=0.3)
         
@@ -227,19 +240,19 @@ class ExertionEvaluator:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         plt.close()
         
-        print(f"ROC曲线已保存到: {save_path}")
+        print(f"ROC curve saved to: {save_path}")
     
     def _plot_binary_roc(self, labels, probs, fold_idx=None):
-        """绘制二分类ROC曲线"""
+        """Plot binary ROC curve"""
         fpr, tpr, thresholds = roc_curve(labels, probs[:, 1])
         auc = roc_auc_score(labels, probs[:, 1])
         
         plt.figure(figsize=(10, 8))
-        plt.plot(fpr, tpr, label=f'ROC曲线 (AUC = {auc:.3f})')
-        plt.plot([0, 1], [0, 1], 'k--', label='随机分类器')
-        plt.xlabel('假正率 (FPR)')
-        plt.ylabel('真正率 (TPR)')
-        plt.title(f'二分类ROC曲线{f" (Fold {fold_idx})" if fold_idx is not None else ""}')
+        plt.plot(fpr, tpr, label=f'ROC Curve (AUC = {auc:.3f})')
+        plt.plot([0, 1], [0, 1], 'k--', label='Random Classifier')
+        plt.xlabel('False Positive Rate (FPR)')
+        plt.ylabel('True Positive Rate (TPR)')
+        plt.title(f'Binary ROC Curve{f" (Fold {fold_idx})" if fold_idx is not None else ""}')
         plt.legend()
         plt.grid(True, alpha=0.3)
         
@@ -252,29 +265,29 @@ class ExertionEvaluator:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         plt.close()
         
-        print(f"ROC曲线已保存到: {save_path}")
+        print(f"ROC curve saved to: {save_path}")
     
     def _plot_prediction_distribution(self, labels, preds, fold_idx=None):
-        """绘制预测分布"""
+        """Plot prediction distribution"""
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
         
-        # 真实标签分布
+        # True label distribution
         unique_labels, counts = np.unique(labels, return_counts=True)
-        ax1.bar(unique_labels, counts, alpha=0.7, label='真实标签')
-        ax1.set_xlabel('运动强度等级')
-        ax1.set_ylabel('样本数量')
-        ax1.set_title('真实标签分布')
+        ax1.bar(unique_labels, counts, alpha=0.7, label='True Labels')
+        ax1.set_xlabel('Exertion Level')
+        ax1.set_ylabel('Sample Count')
+        ax1.set_title('True Label Distribution')
         ax1.legend()
         
-        # 预测标签分布
+        # Predicted label distribution
         unique_preds, pred_counts = np.unique(preds, return_counts=True)
-        ax2.bar(unique_preds, pred_counts, alpha=0.7, color='orange', label='预测标签')
-        ax2.set_xlabel('运动强度等级')
-        ax2.set_ylabel('样本数量')
-        ax2.set_title('预测标签分布')
+        ax2.bar(unique_preds, pred_counts, alpha=0.7, color='orange', label='Predicted Labels')
+        ax2.set_xlabel('Exertion Level')
+        ax2.set_ylabel('Sample Count')
+        ax2.set_title('Predicted Label Distribution')
         ax2.legend()
         
-        plt.suptitle(f'标签分布对比{f" (Fold {fold_idx})" if fold_idx is not None else ""}')
+        plt.suptitle(f'Label Distribution Comparison{f" (Fold {fold_idx})" if fold_idx is not None else ""}')
         
         if fold_idx is not None:
             save_path = os.path.join(self.eval_dir, f"fold_{fold_idx}_prediction_distribution.png")
@@ -285,24 +298,25 @@ class ExertionEvaluator:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         plt.close()
         
-        print(f"预测分布图已保存到: {save_path}")
+        print(f"Prediction distribution plot saved to: {save_path}")
     
     def _plot_class_accuracy(self, labels, preds, fold_idx=None):
-        """绘制每个类别的准确率"""
-        cm = confusion_matrix(labels, preds)
+        """Plot accuracy for each class"""
+        num_classes = self.config.get('num_classes', 5)
+        cm = confusion_matrix(labels, preds, labels=range(num_classes))
         class_accuracy = cm.diagonal() / cm.sum(axis=1)
         
         plt.figure(figsize=(10, 6))
         bars = plt.bar(range(len(class_accuracy)), class_accuracy, alpha=0.7)
         
-        # 在柱状图上添加数值
+        # Add values on bars
         for i, (bar, acc) in enumerate(zip(bars, class_accuracy)):
             plt.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
                     f'{acc:.3f}', ha='center', va='bottom')
         
-        plt.xlabel('运动强度等级')
-        plt.ylabel('准确率')
-        plt.title(f'各类别准确率{f" (Fold {fold_idx})" if fold_idx is not None else ""}')
+        plt.xlabel('Exertion Level')
+        plt.ylabel('Accuracy')
+        plt.title(f'Class Accuracy{f" (Fold {fold_idx})" if fold_idx is not None else ""}')
         plt.ylim(0, 1)
         plt.grid(True, alpha=0.3)
         
@@ -315,17 +329,17 @@ class ExertionEvaluator:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         plt.close()
         
-        print(f"类别准确率图已保存到: {save_path}")
+        print(f"Class accuracy plot saved to: {save_path}")
     
     def optimize_auc_threshold(self, labels, probs, fold_idx=None):
         """
-        优化AUC阈值
+        Optimize AUC threshold
         Args:
-            labels: 真实标签
-            probs: 预测概率
-            fold_idx: fold索引
+            labels: true labels
+            probs: predicted probabilities
+            fold_idx: fold index
         """
-        print(f"开始优化AUC阈值{f' (Fold {fold_idx})' if fold_idx is not None else ''}")
+        print(f"Starting AUC threshold optimization{f' (Fold {fold_idx})' if fold_idx is not None else ''}")
         
         n_classes = probs.shape[1]
         optimal_thresholds = {}
@@ -381,19 +395,19 @@ class ExertionEvaluator:
         with open(save_path, 'w', encoding='utf-8') as f:
             json.dump(threshold_results, f, indent=2, ensure_ascii=False)
         
-        print(f"阈值优化结果已保存到: {save_path}")
-        print(f"最优阈值: {optimal_thresholds}")
+        print(f"Threshold optimization results saved to: {save_path}")
+        print(f"Optimal thresholds: {optimal_thresholds}")
         
         return optimal_thresholds, threshold_metrics
     
     def _plot_threshold_optimization(self, threshold_metrics, fold_idx=None):
-        """绘制阈值优化图"""
+        """Plot threshold optimization"""
         n_classes = len(threshold_metrics)
         fig, axes = plt.subplots(2, 2, figsize=(15, 12))
         axes = axes.flatten()
         
         for i, (class_name, metrics) in enumerate(threshold_metrics.items()):
-            if i >= 4:  # 最多显示4个类别
+            if i >= 4:  # Show max 4 classes
                 break
                 
             thresholds = [m['threshold'] for m in metrics]
@@ -402,26 +416,26 @@ class ExertionEvaluator:
             recall_scores = [m['recall'] for m in metrics]
             
             ax = axes[i]
-            ax.plot(thresholds, f1_scores, label='F1分数', linewidth=2)
-            ax.plot(thresholds, precision_scores, label='精确率', linewidth=2)
-            ax.plot(thresholds, recall_scores, label='召回率', linewidth=2)
+            ax.plot(thresholds, f1_scores, label='F1 Score', linewidth=2)
+            ax.plot(thresholds, precision_scores, label='Precision', linewidth=2)
+            ax.plot(thresholds, recall_scores, label='Recall', linewidth=2)
             
-            # 标记最优阈值
+            # Mark optimal threshold
             best_idx = np.argmax(f1_scores)
             best_threshold = thresholds[best_idx]
             best_f1 = f1_scores[best_idx]
             
             ax.axvline(x=best_threshold, color='red', linestyle='--', 
-                      label=f'最优阈值: {best_threshold:.2f}')
+                      label=f'Optimal Threshold: {best_threshold:.2f}')
             ax.scatter(best_threshold, best_f1, color='red', s=100, zorder=5)
             
-            ax.set_xlabel('阈值')
-            ax.set_ylabel('分数')
-            ax.set_title(f'{class_name} 阈值优化')
+            ax.set_xlabel('Threshold')
+            ax.set_ylabel('Score')
+            ax.set_title(f'{class_name} Threshold Optimization')
             ax.legend()
             ax.grid(True, alpha=0.3)
         
-        plt.suptitle(f'阈值优化结果{f" (Fold {fold_idx})" if fold_idx is not None else ""}')
+        plt.suptitle(f'Threshold Optimization Results{f" (Fold {fold_idx})" if fold_idx is not None else ""}')
         
         if fold_idx is not None:
             save_path = os.path.join(self.eval_dir, f"fold_{fold_idx}_threshold_optimization.png")
@@ -432,11 +446,11 @@ class ExertionEvaluator:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         plt.close()
         
-        print(f"阈值优化图已保存到: {save_path}")
+        print(f"Threshold optimization plot saved to: {save_path}")
     
     def evaluate_cross_validation(self, cv_results):
-        """评估交叉验证结果"""
-        print("开始评估交叉验证结果")
+        """Evaluate cross-validation results"""
+        print("Starting cross-validation evaluation")
         
         # 汇总所有fold的结果
         all_labels = []
@@ -479,7 +493,7 @@ class ExertionEvaluator:
         with open(overall_path, 'w', encoding='utf-8') as f:
             json.dump(overall_results, f, indent=2, ensure_ascii=False)
         
-        print(f"交叉验证整体评估结果已保存到: {overall_path}")
-        print(f"平均准确率: {overall_results['avg_accuracy']:.4f} ± {overall_results['std_accuracy']:.4f}")
+        print(f"Cross-validation overall evaluation results saved to: {overall_path}")
+        print(f"Average accuracy: {overall_results['avg_accuracy']:.4f} ± {overall_results['std_accuracy']:.4f}")
         
         return overall_results 

@@ -30,6 +30,8 @@ class VGG16ExertionModel(nn.Module):
             
         self.input_dim = input_dim
         
+
+        
         # VGG16特征提取器
         self.features = nn.Sequential(
             # Block 1
@@ -121,15 +123,16 @@ class VGG16ExertionModel(nn.Module):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
             elif isinstance(m, nn.Linear):
-                nn.init.normal_(m.weight, 0, 0.01)
+                # 使用更好的线性层初始化
+                nn.init.xavier_uniform_(m.weight)
                 nn.init.constant_(m.bias, 0)
     
     def forward(self, mfcc=None, wav2vec2=None):
         """
         前向传播
         Args:
-            mfcc: MFCC特征 (batch_size, 300, mfcc_dim)
-            wav2vec2: wav2vec2特征 (batch_size, 300, wav2vec2_dim)
+            mfcc: MFCC特征 (batch_size, time_steps, mfcc_dim)
+            wav2vec2: wav2vec2特征 (batch_size, time_steps, wav2vec2_dim)
         """
         # 特征融合
         features_list = []
@@ -142,9 +145,23 @@ class VGG16ExertionModel(nn.Module):
         if not features_list:
             raise ValueError("至少需要一种特征输入")
         
-        # 横向拼接特征 (batch_size, 300, total_dim)
-        # 每个特征都是 (batch_size, 300, feature_dim)
-        # 在特征维度上拼接
+        # 检查时间步长是否一致
+        if len(features_list) > 1:
+            time_steps = [f.shape[1] for f in features_list]
+            if len(set(time_steps)) > 1:
+                # 如果时间步长不同，需要插值到相同长度
+                min_time_steps = min(time_steps)
+                for i in range(len(features_list)):
+                    if features_list[i].shape[1] != min_time_steps:
+                        # 使用插值调整时间步长
+                        features_list[i] = F.interpolate(
+                            features_list[i].transpose(1, 2), 
+                            size=min_time_steps, 
+                            mode='linear', 
+                            align_corners=False
+                        ).transpose(1, 2)
+        
+        # 在特征维度上拼接 (batch_size, time_steps, total_dim)
         x = torch.cat(features_list, dim=2)
         
         # 转换为卷积输入格式 (batch_size, channels, time)
@@ -187,7 +204,7 @@ class VGG16ExertionModelRTX4070(VGG16ExertionModel):
     def forward(self, mfcc=None, wav2vec2=None):
         """优化的前向传播"""
         if self.autocast_enabled and torch.cuda.is_available():
-            with torch.cuda.amp.autocast():
+            with torch.amp.autocast('cuda'):
                 return super().forward(mfcc, wav2vec2)
         else:
             return super().forward(mfcc, wav2vec2)
@@ -200,9 +217,9 @@ def create_model(config):
         config: 配置字典，包含模型参数
     """
     model_config = {
-        'mfcc_dim': config.get('mfcc_dim', 13),
+        'mfcc_dim': config.get('mfcc_dim', 40),  # 修正默认值为40
         'wav2vec2_dim': config.get('wav2vec2_dim', 768),
-        'num_classes': config.get('num_classes', 5),
+        'num_classes': config.get('num_classes', 4),  # 修正为4个类别（0,1,2,3，忽略4）
         'dropout_rate': config.get('dropout_rate', 0.5),
         'use_mfcc': config.get('use_mfcc', True),
         'use_wav2vec2': config.get('use_wav2vec2', True),
@@ -212,6 +229,14 @@ def create_model(config):
         model = VGG16ExertionModelRTX4070(**model_config)
     else:
         model = VGG16ExertionModel(**model_config)
+    
+    # 启用torch.compile优化（如果配置中启用）
+    if config.get('enable_compile', False) and hasattr(torch, 'compile'):
+        try:
+            print("启用torch.compile优化")
+            model = torch.compile(model, mode='max-autotune')
+        except Exception as e:
+            print(f"torch.compile启用失败: {e}")
     
     return model
 

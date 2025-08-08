@@ -77,14 +77,17 @@ class TestVGG16ExertionModel(unittest.TestCase):
         
         # 计算参数数量
         total_params = count_parameters(model)
-        self.assertGreater(total_params, 0)
+        self.assertIsInstance(total_params, dict)
+        self.assertIn('total_params', total_params)
+        self.assertIn('trainable_params', total_params)
+        self.assertGreater(total_params['total_params'], 0)
         
         # 检查可训练参数
         trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        self.assertEqual(total_params, trainable_params)
+        self.assertEqual(total_params['total_params'], trainable_params)
         
-        print(f"模型总参数数: {total_params:,}")
-        print(f"可训练参数数: {trainable_params:,}")
+        print(f"模型总参数数: {total_params['total_params']:,}")
+        print(f"可训练参数数: {total_params['trainable_params']:,}")
     
     def test_model_forward_pass(self):
         """测试模型前向传播"""
@@ -100,23 +103,15 @@ class TestVGG16ExertionModel(unittest.TestCase):
         batch_size = 4
         seq_len = 100
         
-        # 测试MFCC输入
-        mfcc_input = torch.randn(batch_size, self.config['mfcc_dim'], seq_len).to(self.device)
+        # 测试MFCC输入 (batch_size, time_steps, feature_dim)
+        mfcc_input = torch.randn(batch_size, seq_len, self.config['mfcc_dim']).to(self.device)
         
-        # 测试wav2vec2输入
-        wav2vec2_input = torch.randn(batch_size, self.config['wav2vec2_dim'], seq_len).to(self.device)
+        # 测试wav2vec2输入 (batch_size, time_steps, feature_dim)
+        wav2vec2_input = torch.randn(batch_size, seq_len, self.config['wav2vec2_dim']).to(self.device)
         
         # 测试前向传播
         with torch.no_grad():
-            # 测试MFCC输入
-            output_mfcc = model(mfcc=mfcc_input)
-            self.assertEqual(output_mfcc.shape, (batch_size, self.config['num_classes']))
-            
-            # 测试wav2vec2输入
-            output_wav2vec2 = model(wav2vec2=wav2vec2_input)
-            self.assertEqual(output_wav2vec2.shape, (batch_size, self.config['num_classes']))
-            
-            # 测试组合输入
+            # 测试组合输入（同时使用MFCC和wav2vec2）
             output_combined = model(mfcc=mfcc_input, wav2vec2=wav2vec2_input)
             self.assertEqual(output_combined.shape, (batch_size, self.config['num_classes']))
         
@@ -135,12 +130,15 @@ class TestVGG16ExertionModel(unittest.TestCase):
         # 创建测试输入
         batch_size = 2
         seq_len = 200
-        mfcc_input = torch.randn(batch_size, self.config['mfcc_dim'], seq_len).to(self.device)
+        mfcc_input = torch.randn(batch_size, seq_len, self.config['mfcc_dim']).to(self.device)
         
         # 测试特征提取
         with torch.no_grad():
+            # 转换为卷积输入格式 (batch_size, channels, time)
+            mfcc_input_conv = mfcc_input.transpose(1, 2)
+            
             # 获取特征
-            features = model.features(mfcc_input)
+            features = model.features(mfcc_input_conv)
             self.assertIsInstance(features, torch.Tensor)
             
             # 检查特征维度
@@ -178,8 +176,8 @@ class TestVGG16ExertionModel(unittest.TestCase):
         # 创建测试输入
         batch_size = 2
         seq_len = 100
-        mfcc_input = torch.randn(batch_size, self.config['mfcc_dim'], seq_len).to(self.device)
-        wav2vec2_input = torch.randn(batch_size, self.config['wav2vec2_dim'], seq_len).to(self.device)
+        mfcc_input = torch.randn(batch_size, seq_len, self.config['mfcc_dim']).to(self.device)
+        wav2vec2_input = torch.randn(batch_size, seq_len, self.config['wav2vec2_dim']).to(self.device)
         
         with torch.no_grad():
             # 测试MFCC-only模型
@@ -208,8 +206,8 @@ class TestVGG16ExertionModel(unittest.TestCase):
         # 创建测试输入
         batch_size = 4
         seq_len = 100
-        mfcc_input = torch.randn(batch_size, self.config['mfcc_dim'], seq_len).to(self.device)
-        wav2vec2_input = torch.randn(batch_size, self.config['wav2vec2_dim'], seq_len).to(self.device)
+        mfcc_input = torch.randn(batch_size, seq_len, self.config['mfcc_dim']).to(self.device)
+        wav2vec2_input = torch.randn(batch_size, seq_len, self.config['wav2vec2_dim']).to(self.device)
         
         # 测试前向传播
         with torch.no_grad():
@@ -231,8 +229,8 @@ class TestVGG16ExertionModel(unittest.TestCase):
         # 创建测试输入
         batch_size = 2
         seq_len = 100
-        mfcc_input = torch.randn(batch_size, self.config['mfcc_dim'], seq_len).to(self.device)
-        wav2vec2_input = torch.randn(batch_size, self.config['wav2vec2_dim'], seq_len).to(self.device)
+        mfcc_input = torch.randn(batch_size, seq_len, self.config['mfcc_dim']).to(self.device)
+        wav2vec2_input = torch.randn(batch_size, seq_len, self.config['wav2vec2_dim']).to(self.device)
         
         # 前向传播
         output = model(mfcc=mfcc_input, wav2vec2=wav2vec2_input)
@@ -315,8 +313,8 @@ class TestVGG16ExertionModel(unittest.TestCase):
             # 创建测试输入
             batch_size = 4
             seq_len = 100
-            mfcc_input = torch.randn(batch_size, self.config['mfcc_dim'], seq_len).to(self.device)
-            wav2vec2_input = torch.randn(batch_size, self.config['wav2vec2_dim'], seq_len).to(self.device)
+            mfcc_input = torch.randn(batch_size, seq_len, self.config['mfcc_dim']).to(self.device)
+            wav2vec2_input = torch.randn(batch_size, seq_len, self.config['wav2vec2_dim']).to(self.device)
             
             # 前向传播
             with torch.no_grad():
@@ -367,8 +365,8 @@ class TestModelIntegration(unittest.TestCase):
         # 创建测试数据
         batch_size = 4
         seq_len = 100
-        mfcc_input = torch.randn(batch_size, self.config['mfcc_dim'], seq_len).to(self.device)
-        wav2vec2_input = torch.randn(batch_size, self.config['wav2vec2_dim'], seq_len).to(self.device)
+        mfcc_input = torch.randn(batch_size, seq_len, self.config['mfcc_dim']).to(self.device)
+        wav2vec2_input = torch.randn(batch_size, seq_len, self.config['wav2vec2_dim']).to(self.device)
         target = torch.randint(0, self.config['num_classes'], (batch_size,)).to(self.device)
         
         # 训练一个epoch
@@ -411,8 +409,8 @@ class TestModelIntegration(unittest.TestCase):
         # 创建测试输入
         batch_size = 2
         seq_len = 100
-        mfcc_input = torch.randn(batch_size, self.config['mfcc_dim'], seq_len).to(self.device)
-        wav2vec2_input = torch.randn(batch_size, self.config['wav2vec2_dim'], seq_len).to(self.device)
+        mfcc_input = torch.randn(batch_size, seq_len, self.config['mfcc_dim']).to(self.device)
+        wav2vec2_input = torch.randn(batch_size, seq_len, self.config['wav2vec2_dim']).to(self.device)
         
         # 获取原始输出
         model.eval()

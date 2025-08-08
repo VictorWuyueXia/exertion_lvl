@@ -53,6 +53,24 @@ def setup_environment(config: ConfigManager):
         if config.get('system.gpu.enable_flash_attention', True):
             if hasattr(torch.backends.cuda, 'enable_flash_sdp'):
                 torch.backends.cuda.enable_flash_sdp(True)
+        
+        # 启用TF32（提高计算效率）
+        if config.get('system.gpu.enable_tf32', True):
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+        
+        # 启用自动混合精度
+        if config.get('system.gpu.enable_amp', True):
+            print("启用自动混合精度训练")
+        
+        # 启用torch.compile
+        if config.get('system.gpu.enable_compile', False):
+            print("启用torch.compile优化")
+        
+        print(f"GPU内存使用比例: {memory_fraction*100:.0f}%")
+        print(f"cuDNN benchmark: {config.get('system.gpu.enable_benchmark', True)}")
+        print(f"TF32: {config.get('system.gpu.enable_tf32', True)}")
+        print(f"Flash Attention: {config.get('system.gpu.enable_flash_attention', True)}")
     
     return device
 
@@ -160,7 +178,14 @@ def evaluate_model(trainer, cv_results, config: ConfigManager):
     print(f"平均准确率: {overall_results['avg_accuracy']:.4f} ± {overall_results['std_accuracy']:.4f}")
     print(f"各Fold准确率: {[f'{acc:.4f}' for acc in overall_results['fold_accuracies']]}")
     print(f"整体F1分数: {overall_results['overall_metrics']['f1_macro']:.4f}")
-    print(f"整体AUC: {overall_results['overall_metrics']['auc']:.4f}")
+    
+    # 安全处理AUC值
+    auc_value = overall_results['overall_metrics']['auc']
+    if auc_value is not None:
+        print(f"整体AUC: {auc_value:.4f}")
+    else:
+        print("整体AUC: 无法计算")
+    
     print(f"结果保存目录: {trainer.result_dir}")
     print("="*50)
     

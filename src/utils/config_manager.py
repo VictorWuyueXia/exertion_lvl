@@ -137,11 +137,11 @@ class ConfigManager:
             'use_mfcc': self.get('data.features.use_mfcc', True),
             'use_wav2vec2': self.get('data.features.use_wav2vec2', True),
             'wav2vec2_layers': self.get('data.features.wav2vec2_layers', [4]),
-            'mfcc_dim': 13,  # 固定值
-            'wav2vec2_dim': 768,  # 固定值
-            'num_classes': 5,  # 固定值
-            'dropout_rate': 0.5,  # 固定值
-            'optimize_for_rtx4070': True,  # 固定值
+            'mfcc_dim': self.get('model.mfcc_dim', 40),  # 从配置文件读取
+            'wav2vec2_dim': self.get('model.wav2vec2_dim', 768),  # 从配置文件读取
+            'num_classes': self.get('model.num_classes', 5),  # 从配置文件读取
+            'dropout_rate': self.get('model.dropout_rate', 0.5),  # 从配置文件读取
+            'optimize_for_rtx4070': self.get('model.optimize_for_rtx4070', True),  # 从配置文件读取
             'batch_size': self.get('training.batch_size'),
             'epochs': self.get('training.epochs'),
             'learning_rate': self.get('training.learning_rate'),
@@ -149,21 +149,23 @@ class ConfigManager:
             'optimizer': self.get('training.optimizer'),
             'scheduler': self.get('training.scheduler'),
             'criterion': self.get('training.criterion'),
-            'use_amp': True,  # 固定值
+            'use_amp': self.get('system.gpu.enable_amp', True),  # 从GPU配置读取
             'patience': self.get('training.patience'),
             'seed': self.get('system.seed'),
             'num_workers': self.get('training.num_workers'),
-            'pin_memory': True,  # 固定值
+            'pin_memory': self.get('training.pin_memory'),  # 从训练配置读取
+            'persistent_workers': self.get('training.persistent_workers'),  # 从训练配置读取
+            'prefetch_factor': self.get('training.prefetch_factor'),  # 从训练配置读取
             'n_folds': self.get('training.n_folds'),
         }
     
     def get_model_config(self) -> Dict[str, Any]:
         """获取模型配置"""
         return {
-            'mfcc_dim': self.get('model.mfcc_dim', 40),  # 实际MFCC维度是40
-            'wav2vec2_dim': self.get('model.wav2vec2_dim', 768),
-            'num_classes': self.get('model.num_classes', 6),  # 5-10级，共6个类别
-            'dropout_rate': self.get('model.dropout_rate', 0.5),
+            'mfcc_dim': self.get('model.mfcc_dim'),  # 从配置文件读取
+            'wav2vec2_dim': self.get('model.wav2vec2_dim'),  # 从配置文件读取
+            'num_classes': self.get('model.num_classes'),  # 从配置文件读取
+            'dropout_rate': self.get('model.dropout_rate'),  # 从配置文件读取
             'use_mfcc': self.get('data.features.use_mfcc', True),
             'use_wav2vec2': self.get('data.features.use_wav2vec2', True),
             'optimize_for_rtx4070': self.get('model.optimize_for_rtx4070', True),

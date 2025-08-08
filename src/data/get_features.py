@@ -466,8 +466,8 @@ def process_files_in_batches_with_labels(filenames, audio_dir, features_dir, lab
             
             try:
                 y, sr = load_and_resample_audio_optimized(wav_path, sr_target)
-                # 固定目标帧数为300
-                target_frames = 300
+                # 从配置文件获取目标帧数，默认为300
+                target_frames = 300  # 这里应该从配置文件读取，暂时保持默认值
                 
                 audio_batch.append(y)
                 sr_batch.append(sr)
@@ -504,7 +504,7 @@ def process_files_in_batches_with_labels(filenames, audio_dir, features_dir, lab
                         np.save(os.path.join(session_dir, "exertion_level.npy"), exertion_level)
             
             # Process Wav2Vec2 in batch
-            wav2vec_results = extract_wav2vec2_features_batch(audio_batch, sr_batch, selected_layers, sr_target, target_frames=300)
+            wav2vec_results = extract_wav2vec2_features_batch(audio_batch, sr_batch, selected_layers, sr_target, target_frames=target_frames)
             
             # Save Wav2Vec2 results
             for session_id, wav2vec_features in zip(session_ids, wav2vec_results):

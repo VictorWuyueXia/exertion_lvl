@@ -74,13 +74,11 @@ class AudioFeatureDataset(Dataset):
             mfcc_path = os.path.join(session_feature_dir, "mfcc.npy")
             if os.path.exists(mfcc_path):
                 acoustic = np.load(mfcc_path)  # (T1, D1)
-
             else:
                 # 如果没有MFCC，尝试加载acoustic特征
                 acoustic_path = os.path.join(session_feature_dir, "acoustic.npy")
                 if os.path.exists(acoustic_path):
                     acoustic = np.load(acoustic_path)  # (T1, D1)
-
         
         if self.use_mfb:
             mfb_path = os.path.join(session_feature_dir, "mfb.npy")
@@ -102,7 +100,6 @@ class AudioFeatureDataset(Dataset):
                 if os.path.exists(layer_path):
                     embeds = np.load(layer_path)
 
-
         # 获取exertion level标签
         exertion_level = None
         if self.labels_df is not None:
@@ -112,7 +109,19 @@ class AudioFeatureDataset(Dataset):
             # 在标签文件中查找匹配的会话
             label_row = self.labels_df[self.labels_df['Session Name'] == base_session_id]
             if not label_row.empty:
-                exertion_level = label_row['Exertion'].iloc[0]
+                exertion_level = label_row['Exertion'].iloc[0] - 1  # 将1-5调整为0-4
+            else:
+                # 调试：打印不匹配的会话ID
+                print(f"警告: 找不到会话 {base_session_id} 的标签")
+        
+        # 检查是否有必要的特征和标签
+        if acoustic is None and embeds is None:
+            print(f"警告: 会话 {session_id} 没有有效特征")
+            return None
+            
+        if exertion_level is None:
+            print(f"警告: 会话 {session_id} 没有有效标签")
+            return None
         
         return {
             'session_id': session_id,
@@ -125,6 +134,13 @@ class AudioFeatureDataset(Dataset):
 
 def collate_multi_feature_batch(batch):
     """处理多特征批次的collate函数"""
+    # 过滤掉None值
+    valid_batch = [item for item in batch if item is not None]
+    
+    if len(valid_batch) == 0:
+        print("警告: 批次中所有样本都无效")
+        return None
+    
     def to_tensor_and_pad(seqs):
         tensors = [torch.tensor(x, dtype=torch.float32) for x in seqs if x is not None]
         if not tensors:
@@ -132,24 +148,27 @@ def collate_multi_feature_batch(batch):
         return pad_sequence(tensors, batch_first=True, padding_value=0.0)
     
     # 收集所有特征
-    acoustic_features = [item['acoustic'] for item in batch if item['acoustic'] is not None]
-    mfb_features = [item['mfb'] for item in batch if item['mfb'] is not None]
-    embed_features = [item['embeds'] for item in batch if item['embeds'] is not None]
+    acoustic_features = [item['acoustic'] for item in valid_batch if item['acoustic'] is not None]
+    mfb_features = [item['mfb'] for item in valid_batch if item['mfb'] is not None]
+    embed_features = [item['embeds'] for item in valid_batch if item['embeds'] is not None]
     
     # 转换为tensor并padding
     acoustic_tensor = to_tensor_and_pad(acoustic_features)
     mfb_tensor = to_tensor_and_pad(mfb_features)
     embed_tensor = to_tensor_and_pad(embed_features)
     
-
-    
     # 收集标签
-    exertion_levels = [item['exertion_level'] for item in batch if item['exertion_level'] is not None]
+    exertion_levels = [item['exertion_level'] for item in valid_batch if item['exertion_level'] is not None]
     exertion_tensor = torch.tensor(exertion_levels, dtype=torch.long) if exertion_levels else None
     
+    # 调试：检查标签收集情况
+    if len(exertion_levels) == 0:
+        print(f"警告: 批次中没有有效标签，批次大小: {len(valid_batch)}")
+        print(f"批次中的标签: {[item['exertion_level'] for item in valid_batch]}")
+    
     # 收集元数据
-    session_ids = [item['session_id'] for item in batch]
-    metadata = [item['metadata'] for item in batch]
+    session_ids = [item['session_id'] for item in valid_batch]
+    metadata = [item['metadata'] for item in valid_batch]
     
     return {
         'session_ids': session_ids,
@@ -187,7 +206,7 @@ def get_fixed_fold_split(folds, fold_idx):
 
 def get_dataloader_from_sessions(session_ids, meta_df, feature_dir, labels_df=None,
                                 use_acoustic=True, use_mfb=False, use_embed=False, selected_wav2vec2_layers=(7,),
-                                batch_size=4, shuffle=False, num_workers=6, pin_memory=True):
+                                batch_size=4, shuffle=False, num_workers=6, pin_memory=True, persistent_workers=False, prefetch_factor=2):
     """从会话ID列表创建数据加载器"""
     # 过滤元数据
     filtered_df = meta_df[meta_df['session'].isin(session_ids)].reset_index(drop=True)
@@ -210,6 +229,8 @@ def get_dataloader_from_sessions(session_ids, meta_df, feature_dir, labels_df=No
         shuffle=shuffle,
         num_workers=num_workers,
         pin_memory=pin_memory,
+        persistent_workers=persistent_workers and num_workers > 0,
+        prefetch_factor=prefetch_factor if num_workers > 0 else None,
         collate_fn=collate_multi_feature_batch,
         worker_init_fn=seed_worker
     )
