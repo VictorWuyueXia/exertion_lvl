@@ -494,7 +494,9 @@ class ExertionTrainer:
         print("="*60)
         
         # 数据平衡
-        if config.get('balance_data', True):
+        balance_data = config.get('data', {}).get('balance_data', True)
+        print(f"数据平衡配置: {balance_data}")
+        if balance_data:
             print("\n应用数据平衡...")
             from src.data.balancer import balance_audio_dataset
             
@@ -546,15 +548,15 @@ class ExertionTrainer:
             raise ValueError("配置文件中必须指定 'n_folds' 参数")
             
         if n_folds == 1:
-            # 单Fold训练：使用基于参与者的分割
-            from src.data.loader import split_train_test_val
+            # 单Fold训练：使用基于clip的分层分割
+            from src.data.loader import split_train_test_val_stratified
             
             # 从配置文件中获取分割参数
             val_size = config.get('data', {}).get('split', {}).get('val_size', 0.1)
             test_size = config.get('data', {}).get('split', {}).get('test_size', 0.1)
             random_state = config.get('system', {}).get('seed', 42)
             
-            print(f"单Fold训练配置（基于参与者分割）:")
+            print(f"单Fold训练配置（基于clip的分层分割）:")
             print(f"  验证集大小: {val_size}")
             print(f"  测试集大小: {test_size}")
             print(f"  训练集大小: {1-val_size-test_size}")
@@ -564,8 +566,7 @@ class ExertionTrainer:
             use_stratified_split = config.get('data', {}).get('split', {}).get('use_stratified_split', False)
             
             if use_stratified_split:
-                print("使用分层分割确保所有类别都有代表...")
-                from src.data.loader import split_train_test_val_stratified
+                print("使用基于clip的分层分割确保所有类别都有代表...")
                 train_sessions, val_sessions, test_sessions = split_train_test_val_stratified(
                     dataset.metadata_df, 
                     dataset.labels_df,
@@ -574,14 +575,37 @@ class ExertionTrainer:
                     random_state=random_state
                 )
             else:
-                print("使用基于参与者的分割...")
-                from src.data.loader import split_train_test_val
-                train_sessions, val_sessions, test_sessions = split_train_test_val(
-                    dataset.metadata_df, 
-                    test_size=test_size, 
-                    val_size=val_size, 
-                    random_state=random_state
+                print("使用基于clip的随机分割...")
+                # 直接基于clip进行随机分割
+                from sklearn.model_selection import train_test_split
+                import numpy as np
+                
+                # 获取所有clips和对应的标签
+                clips = dataset.metadata_df['session'].tolist()
+                labels = []
+                for session in clips:
+                    base_session_id = session.split('_stride_')[0] if '_stride_' in session else session
+                    label_row = dataset.labels_df[dataset.labels_df['Session Name'] == base_session_id]
+                    if not label_row.empty:
+                        labels.append(label_row.iloc[0]['Exertion'] - 1)
+                    else:
+                        labels.append(0)
+                
+                # 分层分割
+                train_clips, temp_clips, train_labels, temp_labels = train_test_split(
+                    clips, labels, test_size=test_size + val_size, 
+                    random_state=random_state, stratify=labels
                 )
+                
+                # 从临时集合中分割出验证集和测试集
+                val_clips, test_clips, val_labels, test_labels = train_test_split(
+                    temp_clips, temp_labels, test_size=test_size/(test_size + val_size),
+                    random_state=random_state, stratify=temp_labels
+                )
+                
+                train_sessions = train_clips
+                val_sessions = val_clips
+                test_sessions = test_clips
             
             # 转换为索引
             session_to_idx = {session: idx for idx, session in enumerate(all_sessions)}

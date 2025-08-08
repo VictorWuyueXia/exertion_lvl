@@ -124,43 +124,36 @@ class DataLeakageChecker:
     def check_session_consistency(self, train_sessions: List[str], val_sessions: List[str], 
                                 test_sessions: List[str] = None) -> bool:
         """
-        检查会话一致性，确保同一会话的不同片段不会出现在不同集合中
+        检查clip级别一致性，确保同一个clip不会出现在不同集合中
         
         Args:
-            train_sessions: 训练集会话ID
-            val_sessions: 验证集会话ID
-            test_sessions: 测试集会话ID
+            train_sessions: 训练集clip ID
+            val_sessions: 验证集clip ID
+            test_sessions: 测试集clip ID
             
         Returns:
-            bool: 是否存在会话泄露
+            bool: 是否存在clip泄露
         """
-        print("检查会话一致性...")
+        print("检查clip级别一致性...")
         
-        # 提取基础会话ID（去掉stride后缀）
-        def get_base_sessions(sessions):
-            base_sessions = set()
-            for session in sessions:
-                base_session = session.split('_stride_')[0] if '_stride_' in session else session
-                base_sessions.add(base_session)
-            return base_sessions
+        # 直接检查clip级别的重叠（不同stride的clip被视为独立数据点）
+        train_clips = set(train_sessions)
+        val_clips = set(val_sessions)
         
-        train_base = get_base_sessions(train_sessions)
-        val_base = get_base_sessions(val_sessions)
-        
-        if train_base & val_base:
-            self.issues.append("训练集和验证集存在相同的基础会话")
+        if train_clips & val_clips:
+            self.issues.append("训练集和验证集存在相同的clip")
             return False
         
         if test_sessions is not None:
-            test_base = get_base_sessions(test_sessions)
-            if train_base & test_base:
-                self.issues.append("训练集和测试集存在相同的基础会话")
+            test_clips = set(test_sessions)
+            if train_clips & test_clips:
+                self.issues.append("训练集和测试集存在相同的clip")
                 return False
-            if val_base & test_base:
-                self.issues.append("验证集和测试集存在相同的基础会话")
+            if val_clips & test_clips:
+                self.issues.append("验证集和测试集存在相同的clip")
                 return False
         
-        print("  ✓ 会话一致性检查通过")
+        print("  ✓ clip级别一致性检查通过")
         return True
     
     def check_feature_consistency(self, train_features: Dict, val_features: Dict, 

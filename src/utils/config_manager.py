@@ -157,6 +157,18 @@ class ConfigManager:
             'persistent_workers': self.get('training.persistent_workers'),  # 从训练配置读取
             'prefetch_factor': self.get('training.prefetch_factor'),  # 从训练配置读取
             'n_folds': self.get('training.n_folds'),
+            # 添加数据平衡和分割配置
+            'data': {
+                'balance_data': self.get('data.balance_data', True),
+                'balance_config': self.get('data.balance_config', {}),
+                'split': self.get('data.split', {}),
+                'normalize_data': self.get('data.normalize_data', False),
+                'leakage_check': self.get('data.leakage_check', True),
+            },
+            'system': {
+                'seed': self.get('system.seed', 42),
+                'gpu': self.get('system.gpu', {}),
+            },
         }
     
     def get_model_config(self) -> Dict[str, Any]:
