@@ -362,11 +362,20 @@ class ExertionEvaluator:
             for threshold in thresholds:
                 binary_preds = (binary_probs >= threshold).astype(int)
                 
+                # 检查是否有有效的标签
+                if len(np.unique(binary_labels)) < 2:
+                    print(f"警告: 类别 {i} 只有一个标签值，跳过阈值优化")
+                    continue
+                
                 # 计算指标
-                accuracy = accuracy_score(binary_labels, binary_preds)
-                precision = precision_score(binary_labels, binary_preds, zero_division=0)
-                recall = recall_score(binary_labels, binary_preds, zero_division=0)
-                f1 = f1_score(binary_labels, binary_preds, zero_division=0)
+                try:
+                    accuracy = accuracy_score(binary_labels, binary_preds)
+                    precision = precision_score(binary_labels, binary_preds, zero_division=0)
+                    recall = recall_score(binary_labels, binary_preds, zero_division=0)
+                    f1 = f1_score(binary_labels, binary_preds, zero_division=0)
+                except Exception as e:
+                    print(f"警告: 计算类别 {i} 指标时出错: {e}")
+                    continue
                 
                 metrics_at_thresholds.append({
                     'threshold': threshold,
