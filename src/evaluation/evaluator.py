@@ -176,10 +176,12 @@ class ExertionEvaluator:
         self._plot_confusion_matrix(labels, preds, fold_idx)
         
         # ROC曲线
-        if probs.shape[1] > 2:
+        if len(probs.shape) > 1 and probs.shape[1] > 2:
             self._plot_multiclass_roc(labels, probs, fold_idx)
-        else:
+        elif len(probs.shape) > 1 and probs.shape[1] == 2:
             self._plot_binary_roc(labels, probs, fold_idx)
+        else:
+            print("警告: 无法绘制ROC曲线，概率数组形状不正确")
         
         # 预测分布
         self._plot_prediction_distribution(labels, preds, fold_idx)
@@ -188,15 +190,18 @@ class ExertionEvaluator:
         self._plot_class_accuracy(labels, preds, fold_idx)
     
     def _plot_confusion_matrix(self, labels, preds, fold_idx=None):
-        """Plot confusion matrix"""
+        """Plot confusion matrix in percentage format"""
         num_classes = self.config.get('num_classes', 5)
         cm = confusion_matrix(labels, preds, labels=range(num_classes))
         
+        # 计算百分比
+        cm_percentage = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis] * 100
+        
         plt.figure(figsize=(10, 8))
-        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
+        sns.heatmap(cm_percentage, annot=True, fmt='.1f', cmap='Blues', 
                    xticklabels=range(num_classes),
                    yticklabels=range(num_classes))
-        plt.title(f'Confusion Matrix{f" (Fold {fold_idx})" if fold_idx is not None else ""}')
+        plt.title(f'Confusion Matrix (Percentage){f" (Fold {fold_idx})" if fold_idx is not None else ""}')
         plt.xlabel('Predicted Label')
         plt.ylabel('True Label')
         
@@ -209,7 +214,7 @@ class ExertionEvaluator:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         plt.close()
         
-        print(f"Confusion matrix saved to: {save_path}")
+        print(f"Confusion matrix (percentage) saved to: {save_path}")
     
     def _plot_multiclass_roc(self, labels, probs, fold_idx=None):
         """Plot multi-class ROC curve"""

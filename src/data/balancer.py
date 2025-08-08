@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 数据平衡器 - 确保每个类别都有指定数量的样本
+修正版本：避免过度重复采样，确保合理分布
 """
 import numpy as np
 import pandas as pd
@@ -12,17 +13,19 @@ import os
 class DataBalancer:
     """数据平衡器"""
     
-    def __init__(self, target_samples_per_class=300, random_seed=42, ignore_classes=None):
+    def __init__(self, target_samples_per_class=300, random_seed=42, ignore_classes=None, max_oversampling_ratio=2.0):
         """
         初始化数据平衡器
         Args:
             target_samples_per_class: 每个类别的目标样本数量
             random_seed: 随机种子
             ignore_classes: 要忽略的类别列表
+            max_oversampling_ratio: 最大过采样比例，防止过度重复
         """
         self.target_samples_per_class = target_samples_per_class
         self.random_seed = random_seed
         self.ignore_classes = ignore_classes or []
+        self.max_oversampling_ratio = max_oversampling_ratio
         random.seed(random_seed)
         np.random.seed(random_seed)
     
@@ -66,7 +69,7 @@ class DataBalancer:
             count = len(class_samples[class_id])
             print(f"  类别 {class_id}: {count} 个样本")
         
-        # 平衡数据
+        # 平衡数据（修正版本）
         balanced_indices = []
         
         for class_id in sorted(class_samples.keys()):
@@ -83,16 +86,42 @@ class DataBalancer:
                 selected_samples = random.sample(samples, self.target_samples_per_class)
                 print(f"类别 {class_id}: 从 {current_count} 个样本中选择 {self.target_samples_per_class} 个")
             else:
-                # 如果样本不足，随机重复
-                selected_samples = samples.copy()
-                while len(selected_samples) < self.target_samples_per_class:
-                    selected_samples.extend(random.sample(samples, min(len(samples), self.target_samples_per_class - len(selected_samples))))
-                print(f"类别 {class_id}: 从 {current_count} 个样本扩展到 {len(selected_samples)} 个")
+                # 如果样本不足，计算最大允许的重复次数
+                max_allowed_samples = min(
+                    self.target_samples_per_class,
+                    int(current_count * self.max_oversampling_ratio)
+                )
+                
+                if max_allowed_samples <= current_count:
+                    # 如果原始样本数已经足够，直接使用
+                    selected_samples = samples.copy()
+                    print(f"类别 {class_id}: 使用全部 {current_count} 个样本（不超过过采样限制）")
+                else:
+                    # 适度重复采样
+                    selected_samples = samples.copy()
+                    # 计算需要重复的次数
+                    repeat_times = max_allowed_samples // current_count
+                    remainder = max_allowed_samples % current_count
+                    
+                    # 重复采样
+                    for _ in range(repeat_times - 1):
+                        selected_samples.extend(samples)
+                    
+                    # 添加剩余的随机样本
+                    if remainder > 0:
+                        selected_samples.extend(random.sample(samples, remainder))
+                    
+                    print(f"类别 {class_id}: 从 {current_count} 个样本扩展到 {len(selected_samples)} 个（适度重复）")
             
             balanced_indices.extend(selected_samples)
         
         # 创建平衡后的DataFrame
-        balanced_metadata_df = metadata_df.iloc[balanced_indices].reset_index(drop=True)
+        # 确保索引在有效范围内
+        valid_indices = [idx for idx in balanced_indices if idx < len(metadata_df)]
+        if len(valid_indices) != len(balanced_indices):
+            print(f"警告: {len(balanced_indices) - len(valid_indices)} 个索引超出范围，已过滤")
+        
+        balanced_metadata_df = metadata_df.iloc[valid_indices].reset_index(drop=True)
         
         # 验证平衡结果
         print(f"\n平衡后数据分布:")
@@ -113,7 +142,7 @@ class DataBalancer:
         
         return balanced_metadata_df
 
-def balance_audio_dataset(metadata_df, labels_df, feature_dir, target_samples_per_class=300, random_seed=42, ignore_classes=None):
+def balance_audio_dataset(metadata_df, labels_df, feature_dir, target_samples_per_class=300, random_seed=42, ignore_classes=None, max_oversampling_ratio=2.0):
     """
     平衡音频数据集的便捷函数
     Args:
@@ -123,8 +152,9 @@ def balance_audio_dataset(metadata_df, labels_df, feature_dir, target_samples_pe
         target_samples_per_class: 每个类别的目标样本数量
         random_seed: 随机种子
         ignore_classes: 要忽略的类别列表
+        max_oversampling_ratio: 最大过采样比例
     Returns:
         balanced_metadata_df: 平衡后的元数据DataFrame
     """
-    balancer = DataBalancer(target_samples_per_class, random_seed, ignore_classes)
+    balancer = DataBalancer(target_samples_per_class, random_seed, ignore_classes, max_oversampling_ratio)
     return balancer.balance_dataset(metadata_df, labels_df, feature_dir)

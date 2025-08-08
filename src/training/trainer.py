@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader
 import numpy as np
@@ -122,7 +123,7 @@ class ExertionTrainer:
         criterion_name = self.config.get('criterion', 'cross_entropy')
         
         if criterion_name.lower() == 'cross_entropy':
-            return nn.CrossEntropyLoss()
+            return nn.CrossEntropyLoss()  # 使用标准交叉熵损失，不忽略任何类别
         elif criterion_name.lower() == 'focal':
             alpha = self.config.get('focal_alpha', 1.0)
             gamma = self.config.get('focal_gamma', 2.0)
@@ -280,7 +281,7 @@ class ExertionTrainer:
                     'avg_loss': f'{total_loss/(batch_idx+1):.4f}'
                 })
         
-        # 计算指标
+        # 计算指标（包含所有类别）
         accuracy = accuracy_score(all_labels, all_preds)
         avg_loss = total_loss / len(val_loader)
         
@@ -458,6 +459,22 @@ class ExertionTrainer:
         
         return fold_train_history, fold_val_history, best_val_acc, best_epoch, final_epoch
     
+    def _get_config_value(self, config, key, default=None):
+        """从嵌套配置中获取值"""
+        # 处理嵌套配置结构
+        if 'data' in config and key in ['feature_dir', 'use_mfcc', 'use_mfb', 'use_wav2vec2', 'wav2vec2_layers']:
+            if key == 'feature_dir':
+                return config['data']['feature_dir']
+            elif key == 'use_mfcc':
+                return config['data']['features']['use_mfcc']
+            elif key == 'use_mfb':
+                return config['data']['features']['use_mfb']
+            elif key == 'use_wav2vec2':
+                return config['data']['features']['use_wav2vec2']
+            elif key == 'wav2vec2_layers':
+                return config['data']['wav2vec2_layers']
+        return config.get(key, default)
+    
     def cross_validation_train(self, dataset, config):
         """交叉验证训练（支持单Fold）"""
         n_folds = config.get('n_folds')
@@ -481,25 +498,31 @@ class ExertionTrainer:
             print("\n应用数据平衡...")
             from src.data.balancer import balance_audio_dataset
             
+            # 从配置文件中获取平衡参数
+            balance_config = config.get('data', {}).get('balance_config', {})
+            target_samples = balance_config.get('target_samples_per_class', 800)
+            max_oversampling = balance_config.get('max_oversampling_ratio', 1.5)
+            
             balanced_metadata_df = balance_audio_dataset(
                 dataset.metadata_df,
                 dataset.labels_df,
-                config['feature_dir'],
-                target_samples_per_class=1500,  # 每个类别1500个样本
+                self._get_config_value(config, 'feature_dir'),
+                target_samples_per_class=target_samples,
                 random_seed=config.get('system', {}).get('seed', 42),
-                ignore_classes=[4]  # 忽略类别4
+                ignore_classes=[],  # 不忽略任何类别
+                max_oversampling_ratio=max_oversampling
             )
             
             # 创建平衡后的数据集
             from src.data.loader import AudioFeatureDataset
             balanced_dataset = AudioFeatureDataset(
                 metadata_df=balanced_metadata_df,
-                feature_dir=config['feature_dir'],
+                feature_dir=self._get_config_value(config, 'feature_dir'),
                 labels_df=dataset.labels_df,
-                use_acoustic=config.get('use_mfcc', True),
-                use_mfb=config.get('use_mfb', False),
-                use_embed=config.get('use_wav2vec2', True),
-                selected_wav2vec2_layers=config.get('wav2vec2_layers', [4])
+                use_acoustic=self._get_config_value(config, 'use_mfcc', True),
+                use_mfb=self._get_config_value(config, 'use_mfb', False),
+                use_embed=self._get_config_value(config, 'use_wav2vec2', True),
+                selected_wav2vec2_layers=self._get_config_value(config, 'wav2vec2_layers', [4])
             )
             
             dataset = balanced_dataset
@@ -523,30 +546,81 @@ class ExertionTrainer:
             raise ValueError("配置文件中必须指定 'n_folds' 参数")
             
         if n_folds == 1:
-            # 单Fold训练：使用配置文件中的验证集大小
-            from sklearn.model_selection import train_test_split
+            # 单Fold训练：使用基于参与者的分割
+            from src.data.loader import split_train_test_val
             
-            # 从配置文件中获取验证集大小
+            # 从配置文件中获取分割参数
             val_size = config.get('data', {}).get('split', {}).get('val_size', 0.1)
+            test_size = config.get('data', {}).get('split', {}).get('test_size', 0.1)
             random_state = config.get('system', {}).get('seed', 42)
             
-            print(f"单Fold训练配置:")
+            print(f"单Fold训练配置（基于参与者分割）:")
             print(f"  验证集大小: {val_size}")
-            print(f"  训练集大小: {1-val_size}")
+            print(f"  测试集大小: {test_size}")
+            print(f"  训练集大小: {1-val_size-test_size}")
             print(f"  随机种子: {random_state}")
             
-            train_idx, val_idx = train_test_split(
-                range(len(all_sessions)), 
-                test_size=val_size, 
-                random_state=random_state,
-                stratify=all_labels
+            # 使用基于参与者的分割
+            train_sessions, val_sessions, test_sessions = split_train_test_val(
+                dataset.metadata_df, 
+                test_size=test_size, 
+                val_size=val_size, 
+                random_state=random_state
             )
+            
+            # 转换为索引
+            session_to_idx = {session: idx for idx, session in enumerate(all_sessions)}
+            train_idx = [session_to_idx[session] for session in train_sessions if session in session_to_idx]
+            val_idx = [session_to_idx[session] for session in val_sessions if session in session_to_idx]
+            test_idx = [session_to_idx[session] for session in test_sessions if session in session_to_idx]
+            
             fold_splits = [(train_idx, val_idx)]
+            test_indices = test_idx  # 保存测试集索引
         else:
-            # 多Fold交叉验证
+            # 多Fold交叉验证（也需要基于参与者）
             random_state = config.get('system', {}).get('seed', 42)
             skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=random_state)
             fold_splits = list(skf.split(all_sessions, all_labels))
+            test_indices = None
+        
+        # 数据泄露检查
+        print("\n开始数据泄露检查...")
+        from src.utils.data_leakage_checker import check_training_pipeline
+        
+        if n_folds == 1:
+            train_indices = train_idx
+            val_indices = val_idx
+            # test_indices已经在上面定义了
+        else:
+            # 多fold情况下，使用第一个fold进行检查
+            train_indices = fold_splits[0][0]
+            val_indices = fold_splits[0][1]
+            test_indices = None
+        
+        leakage_result = check_training_pipeline(dataset, config, train_indices, val_indices, test_indices)
+        
+        if not leakage_result['passed']:
+            print("❌ 数据泄露检查失败，训练终止")
+            return []
+        
+        print("✅ 数据泄露检查通过，继续训练")
+        
+        # 数据标准化（在train_test_split之后）
+        if config.get('data', {}).get('normalize_data', False):
+            print("\n应用数据标准化...")
+            from src.data.normalizer import normalize_dataset_features
+            
+            # 标准化参数保存目录
+            normalize_save_dir = os.path.join(self.result_dir, "normalization")
+            
+            # 标准化特征
+            normalized_train, normalized_val, normalized_test = normalize_dataset_features(
+                dataset, train_indices, val_indices, test_indices, normalize_save_dir
+            )
+            
+            print("数据标准化完成")
+        else:
+            normalized_train = normalized_val = normalized_test = None
         
         fold_results = []
         
@@ -612,12 +686,12 @@ class ExertionTrainer:
         return get_dataloader_from_sessions(
             session_ids=session_ids,
             meta_df=dataset.metadata_df,
-            feature_dir=config['feature_dir'],
+            feature_dir=self._get_config_value(config, 'feature_dir'),
             labels_df=dataset.labels_df,
-            use_acoustic=config.get('use_acoustic', True),
-            use_mfb=config.get('use_mfb', True),
-            use_embed=config.get('use_wav2vec2', True),
-            selected_wav2vec2_layers=config.get('wav2vec2_layers', [4]),
+            use_acoustic=self._get_config_value(config, 'use_mfcc', True),
+            use_mfb=self._get_config_value(config, 'use_mfb', True),
+            use_embed=self._get_config_value(config, 'use_wav2vec2', True),
+            selected_wav2vec2_layers=self._get_config_value(config, 'wav2vec2_layers', [4]),
             batch_size=config.get('batch_size'),
             shuffle=shuffle,
             num_workers=config.get('num_workers'),
@@ -812,6 +886,9 @@ class ExertionTrainer:
         except Exception as e:
             print(f"  测试{model_name}时出错: {e}")
             return 0.0
+
+
+
 
 
 class FocalLoss(nn.Module):

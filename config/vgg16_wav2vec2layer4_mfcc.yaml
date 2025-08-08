@@ -22,6 +22,9 @@ data:
   # 数据平衡
   balance_data: true   # 启用数据平衡
   
+  # 数据标准化
+  normalize_data: true  # 启用数据标准化
+  
   # wav2vec2层选择
   wav2vec2_layers: [4]  # 使用第4层特征
   
@@ -33,14 +36,14 @@ model:
   # 特征维度配置（根据实际数据调整）
   mfcc_dim: 40          # 实际MFCC维度
   wav2vec2_dim: 768     # wav2vec2特征维度
-  num_classes: 4        # 分类数量（标签0,1,2,3，忽略4）
+  num_classes: 5        # 分类数量（标签0,1,2,3,4，全流程5个类别）
   dropout_rate: 0.6     # 增加Dropout率以加强正则化
 
 # ==================== 训练配置（RTX 4070深度优化） ====================
 training:
   # 基础参数（针对RTX 4070深度优化）
-  epochs: 10           # 增加训练轮数以获得更好结果
-  batch_size: 1024       # 减小batch size以避免内存问题
+  epochs: 15            # 测试用5个epoch
+  batch_size: 128       # 减小batch size以避免内存问题
   learning_rate: 1e-4   # 降低学习率以避免过拟合
   weight_decay: 5e-4    # 增加权重衰减以加强正则化
   
@@ -58,7 +61,7 @@ training:
   n_folds: 1
   
   # 数据加载（减少内存使用）
-  num_workers: 2        # 减少工作进程数避免内存冲突
+  num_workers: 8        # 减少工作进程数避免内存冲突
   pin_memory: false     # 禁用内存固定以减少内存使用
   persistent_workers: false  # 禁用保持工作进程
   prefetch_factor: 2    # 减少预取因子

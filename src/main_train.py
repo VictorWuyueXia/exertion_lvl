@@ -8,6 +8,7 @@
 import os
 import sys
 import json
+import yaml
 import argparse
 import torch
 import numpy as np
@@ -19,7 +20,6 @@ warnings.filterwarnings('ignore')
 # 添加项目根目录到路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.data.process_data import process_data_pipeline
 from src.data.loader import AudioFeatureDataset, get_session_metadata
 from src.training.trainer import ExertionTrainer
 from src.evaluation.evaluator import ExertionEvaluator
@@ -46,7 +46,7 @@ def create_training_config():
         
         # 训练配置
         'batch_size': 8,  # RTX4070优化
-        'epochs': 100,
+        'epochs': 5,  # 测试用5个epoch
         'learning_rate': 1e-4,
         'weight_decay': 1e-4,
         'optimizer': 'adamw',
@@ -144,8 +144,22 @@ def prepare_dataset(config):
     """准备数据集"""
     print("准备数据集...")
     
+    # 处理嵌套配置结构
+    if 'data' in config:
+        feature_dir = config['data']['feature_dir']
+        use_mfb = config['data']['features']['use_mfb']
+        use_mfcc = config['data']['features']['use_mfcc']
+        use_wav2vec2 = config['data']['features']['use_wav2vec2']
+        wav2vec2_layers = config['data']['wav2vec2_layers']
+    else:
+        feature_dir = config['feature_dir']
+        use_mfb = config['use_mfb']
+        use_mfcc = config['use_mfcc']
+        use_wav2vec2 = config['use_wav2vec2']
+        wav2vec2_layers = config['wav2vec2_layers']
+    
     # 获取会话元数据
-    metadata_df = get_session_metadata(config['feature_dir'])
+    metadata_df = get_session_metadata(feature_dir)
     print(f"找到 {len(metadata_df)} 个会话")
     
     # 读取标签数据
@@ -156,12 +170,12 @@ def prepare_dataset(config):
     # 创建数据集
     dataset = AudioFeatureDataset(
         metadata_df=metadata_df,
-        feature_dir=config['feature_dir'],
+        feature_dir=feature_dir,
         labels_df=labels_df,
-        use_acoustic=config['use_acoustic'],
-        use_mfb=config['use_mfb'],
-        use_embed=config['use_wav2vec2'],
-        selected_wav2vec2_layers=config['wav2vec2_layers']
+        use_acoustic=use_mfcc,
+        use_mfb=use_mfb,
+        use_embed=use_wav2vec2,
+        selected_wav2vec2_layers=wav2vec2_layers
     )
     
     print(f"数据集创建完成，包含 {len(dataset)} 个样本")
@@ -172,20 +186,36 @@ def train_model(config, dataset):
     """训练模型"""
     print("开始模型训练...")
     
+    # 处理嵌套配置结构
+    if 'training' in config:
+        training_config = config['training']
+        model_config = config['model']
+        system_config = config['system']
+        
+        # 合并配置
+        merged_config = {
+            **config,
+            **training_config,
+            **model_config,
+            **system_config
+        }
+    else:
+        merged_config = config
+    
     # 创建训练器
-    trainer = ExertionTrainer(config)
+    trainer = ExertionTrainer(merged_config)
     
     # 保存配置
     trainer._save_config()
     
     # 创建模型并显示参数数量
-    model = create_model(config)
+    model = create_model(merged_config)
     param_info = count_parameters(model)
     print(f"模型参数数量: {param_info['total_params_millions']:.2f}M")
     print(f"可训练参数数量: {param_info['trainable_params_millions']:.2f}M")
     
-    # 5折交叉验证训练
-    cv_results = trainer.cross_validation_train(dataset, config)
+    # 交叉验证训练
+    cv_results = trainer.cross_validation_train(dataset, merged_config)
     
     return trainer, cv_results
 
@@ -232,7 +262,10 @@ def main():
     # 创建配置
     if args.config and os.path.exists(args.config):
         with open(args.config, 'r', encoding='utf-8') as f:
-            config = json.load(f)
+            if args.config.endswith('.yaml') or args.config.endswith('.yml'):
+                config = yaml.safe_load(f)
+            else:
+                config = json.load(f)
         print(f"从文件加载配置: {args.config}")
     else:
         config = create_training_config()

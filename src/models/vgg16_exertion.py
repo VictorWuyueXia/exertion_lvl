@@ -10,7 +10,7 @@ class VGG16ExertionModel(nn.Module):
     """
     
     def __init__(self, 
-                 mfcc_dim=13, 
+                 mfcc_dim=40,  # 修正为实际的MFCC维度
                  wav2vec2_dim=768,
                  num_classes=5,
                  dropout_rate=0.5,
@@ -20,6 +20,7 @@ class VGG16ExertionModel(nn.Module):
         
         self.use_mfcc = use_mfcc
         self.use_wav2vec2 = use_wav2vec2
+        self.num_classes = num_classes
         
         # 计算输入维度
         input_dim = 0
@@ -29,84 +30,53 @@ class VGG16ExertionModel(nn.Module):
             input_dim += wav2vec2_dim
             
         self.input_dim = input_dim
+        self.dropout_rate = dropout_rate
         
-
-        
-        # VGG16特征提取器
+        # VGG16特征提取器（修正为1D卷积）
         self.features = nn.Sequential(
             # Block 1
-            nn.Conv1d(input_dim, 64, kernel_size=3, padding=1),
-            nn.BatchNorm1d(64),
+            nn.Conv1d(self.input_dim, 64, kernel_size=3, padding=1),
             nn.ReLU(inplace=True),
             nn.Conv1d(64, 64, kernel_size=3, padding=1),
-            nn.BatchNorm1d(64),
             nn.ReLU(inplace=True),
             nn.MaxPool1d(kernel_size=2, stride=2),
-            nn.Dropout(dropout_rate),
-            
+
             # Block 2
             nn.Conv1d(64, 128, kernel_size=3, padding=1),
-            nn.BatchNorm1d(128),
             nn.ReLU(inplace=True),
             nn.Conv1d(128, 128, kernel_size=3, padding=1),
-            nn.BatchNorm1d(128),
             nn.ReLU(inplace=True),
             nn.MaxPool1d(kernel_size=2, stride=2),
-            nn.Dropout(dropout_rate),
-            
+
             # Block 3
             nn.Conv1d(128, 256, kernel_size=3, padding=1),
-            nn.BatchNorm1d(256),
             nn.ReLU(inplace=True),
             nn.Conv1d(256, 256, kernel_size=3, padding=1),
-            nn.BatchNorm1d(256),
             nn.ReLU(inplace=True),
             nn.Conv1d(256, 256, kernel_size=3, padding=1),
-            nn.BatchNorm1d(256),
             nn.ReLU(inplace=True),
             nn.MaxPool1d(kernel_size=2, stride=2),
-            nn.Dropout(dropout_rate),
-            
+
             # Block 4
             nn.Conv1d(256, 512, kernel_size=3, padding=1),
-            nn.BatchNorm1d(512),
             nn.ReLU(inplace=True),
             nn.Conv1d(512, 512, kernel_size=3, padding=1),
-            nn.BatchNorm1d(512),
             nn.ReLU(inplace=True),
             nn.Conv1d(512, 512, kernel_size=3, padding=1),
-            nn.BatchNorm1d(512),
             nn.ReLU(inplace=True),
-            nn.MaxPool1d(kernel_size=2, stride=2),
-            nn.Dropout(dropout_rate),
-            
-            # Block 5
-            nn.Conv1d(512, 512, kernel_size=3, padding=1),
-            nn.BatchNorm1d(512),
-            nn.ReLU(inplace=True),
-            nn.Conv1d(512, 512, kernel_size=3, padding=1),
-            nn.BatchNorm1d(512),
-            nn.ReLU(inplace=True),
-            nn.Conv1d(512, 512, kernel_size=3, padding=1),
-            nn.BatchNorm1d(512),
-            nn.ReLU(inplace=True),
-            nn.MaxPool1d(kernel_size=2, stride=2),
-            nn.Dropout(dropout_rate),
         )
         
         # 全局平均池化后的特征维度
         # 使用adaptive_avg_pool1d后，特征维度为512
         self.feature_dim = 512
         
-        # 分类器
+        # 分类器（调整维度）
         self.classifier = nn.Sequential(
-            nn.Linear(self.feature_dim, 4096),
+            nn.Linear(self.feature_dim, 1024),
             nn.ReLU(inplace=True),
-            nn.Dropout(dropout_rate),
-            nn.Linear(4096, 1024),
+            nn.Linear(1024, 512),
             nn.ReLU(inplace=True),
-            nn.Dropout(dropout_rate),
-            nn.Linear(1024, num_classes)
+            nn.Linear(512, num_classes)
         )
         
         # 权重初始化
@@ -116,16 +86,20 @@ class VGG16ExertionModel(nn.Module):
         """初始化模型权重"""
         for m in self.modules():
             if isinstance(m, nn.Conv1d):
+                # 使用PyTorch默认的Kaiming初始化
                 nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
-            elif isinstance(m, nn.BatchNorm1d):
-                nn.init.constant_(m.weight, 1)
-                nn.init.constant_(m.bias, 0)
             elif isinstance(m, nn.Linear):
-                # 使用更好的线性层初始化
+                # 使用PyTorch默认的Xavier初始化
                 nn.init.xavier_uniform_(m.weight)
-                nn.init.constant_(m.bias, 0)
+                if m.bias is not None:
+                    # 回归层特殊初始化：权重标准差0.01，偏置1.5
+                    if m.out_features == self.num_classes:
+                        nn.init.normal_(m.weight, mean=0, std=0.01)
+                        nn.init.constant_(m.bias, 1.5)
+                    else:
+                        nn.init.constant_(m.bias, 0)
     
     def forward(self, mfcc=None, wav2vec2=None):
         """
@@ -136,14 +110,21 @@ class VGG16ExertionModel(nn.Module):
         """
         # 特征融合
         features_list = []
+        current_input_dim = 0
         
         if self.use_mfcc and mfcc is not None:
             features_list.append(mfcc)
+            current_input_dim += mfcc.shape[-1]
         if self.use_wav2vec2 and wav2vec2 is not None:
             features_list.append(wav2vec2)
+            current_input_dim += wav2vec2.shape[-1]
         
         if not features_list:
             raise ValueError("至少需要一种特征输入")
+        
+        # 检查输入维度是否匹配
+        if current_input_dim != self.input_dim:
+            raise ValueError(f"输入维度不匹配: 期望 {self.input_dim}, 实际 {current_input_dim}")
         
         # 检查时间步长是否一致
         if len(features_list) > 1:
@@ -170,9 +151,8 @@ class VGG16ExertionModel(nn.Module):
         # VGG特征提取
         x = self.features(x)
         
-        # 全局平均池化
-        x = F.adaptive_avg_pool1d(x, 1)
-        x = x.view(x.size(0), -1)
+        # 全局平均池化 (batch_size, 512, time) -> (batch_size, 512)
+        x = F.adaptive_avg_pool1d(x, 1).squeeze(-1)
         
         # 分类
         x = self.classifier(x)
@@ -217,9 +197,9 @@ def create_model(config):
         config: 配置字典，包含模型参数
     """
     model_config = {
-        'mfcc_dim': config.get('mfcc_dim', 40),  # 修正默认值为40
+        'mfcc_dim': config.get('mfcc_dim', 40),  # 实际MFCC维度
         'wav2vec2_dim': config.get('wav2vec2_dim', 768),
-        'num_classes': config.get('num_classes', 4),  # 修正为4个类别（0,1,2,3，忽略4）
+        'num_classes': config.get('num_classes', 5),  # 5个类别（0,1,2,3,4）
         'dropout_rate': config.get('dropout_rate', 0.5),
         'use_mfcc': config.get('use_mfcc', True),
         'use_wav2vec2': config.get('use_wav2vec2', True),
