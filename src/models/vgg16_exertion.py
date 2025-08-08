@@ -190,13 +190,13 @@ class VGG16ExertionModelRTX4070(VGG16ExertionModel):
         # 优化内存使用
         self.gradient_checkpointing = False  # 可以根据需要启用
     
-    def forward(self, mfcc=None, wav2vec2=None):
+    def forward(self, mfcc=None, wav2vec2=None, mfb=None):
         """优化的前向传播"""
         if self.autocast_enabled and torch.cuda.is_available():
             with torch.amp.autocast('cuda'):
-                return super().forward(mfcc, wav2vec2)
+                return super().forward(mfcc, wav2vec2, mfb)
         else:
-            return super().forward(mfcc, wav2vec2)
+            return super().forward(mfcc, wav2vec2, mfb)
 
 
 def create_model(config):

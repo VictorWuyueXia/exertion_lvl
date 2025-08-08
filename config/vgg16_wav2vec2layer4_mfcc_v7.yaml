@@ -16,7 +16,7 @@ data:
   
   # 特征选择
   features:
-    use_mfb: false      # 禁用MFB特征（当前配置）
+    use_mfb: false      # 禁用MFB特征（当前配置，未来可启用）
     use_wav2vec2: true  # 使用wav2vec2特征
     use_mfcc: true      # 使用MFCC特征
   
@@ -50,7 +50,7 @@ model:
 training:
   # 基础参数（针对RTX 4070深度优化）
   epochs: 50            # 训练轮数
-  batch_size: 128       # 批大小
+  batch_size: 32        # 批大小（进一步减少以避免内存不足）
   learning_rate: 1e-4   # 学习率
   weight_decay: 5e-4    # 权重衰减
   
@@ -70,10 +70,10 @@ training:
   n_folds: 1
   
   # 数据加载（减少内存使用）
-  num_workers: 8        # 工作进程数
+  num_workers: 4        # 减少工作进程数
   pin_memory: false     # 禁用内存固定
   persistent_workers: false  # 禁用保持工作进程
-  prefetch_factor: 2    # 预取因子
+  prefetch_factor: 1    # 减少预取因子
 
 # ==================== 系统配置（RTX 4070深度优化） ====================
 system:
@@ -82,8 +82,8 @@ system:
   
   # GPU配置（RTX 4070深度优化）
   gpu:
-    memory_fraction: 0.8   # 使用80%的GPU内存
-    enable_benchmark: true  # 启用cuDNN benchmark
+    memory_fraction: 0.6   # 减少GPU内存使用比例
+    enable_benchmark: false # 禁用cuDNN benchmark以减少内存
     enable_flash_attention: false  # 禁用Flash Attention
     enable_tf32: true      # 启用TF32
     enable_amp: true       # 启用自动混合精度

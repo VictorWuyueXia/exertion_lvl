@@ -646,16 +646,16 @@ class ExertionTrainer:
         print("✅ 数据泄露检查通过，继续训练")
         
         # 数据标准化（在train_test_split之后）
-        if config.get('data', {}).get('normalize_data', False):
+        if config.get('data', {}).get('normalize_data', True):
             print("\n应用数据标准化...")
-            from src.data.normalizer import normalize_dataset_features
+            from src.data.normalizer_memory_efficient import normalize_dataset_features_memory_efficient
             
             # 标准化参数保存目录
             normalize_save_dir = os.path.join(self.result_dir, "normalization")
             
-            # 标准化特征
-            normalized_train, normalized_val, normalized_test = normalize_dataset_features(
-                dataset, train_indices, val_indices, test_indices, normalize_save_dir
+            # 内存友好的特征标准化
+            normalized_train, normalized_val, normalized_test = normalize_dataset_features_memory_efficient(
+                dataset, train_indices, val_indices, test_indices, normalize_save_dir, batch_size=50
             )
             
             print("数据标准化完成")
@@ -749,10 +749,12 @@ class ExertionTrainer:
             model_config = {
                 'mfcc_dim': 40,  # 实际MFCC维度
                 'wav2vec2_dim': 768,
+                'mfb_dim': 40,   # MFB特征维度
                 'num_classes': 5,  # 1-5级，共5个类别
                 'dropout_rate': 0.5,
-                'use_mfcc': config.get('use_acoustic', True),
-                'use_wav2vec2': config.get('use_wav2vec2', True),
+                'use_mfcc': self._get_config_value(config, 'use_mfcc', True),
+                'use_wav2vec2': self._get_config_value(config, 'use_wav2vec2', True),
+                'use_mfb': self._get_config_value(config, 'use_mfb', False),
                 'optimize_for_rtx4070': True,
             }
         else:

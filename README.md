@@ -11,20 +11,37 @@
 ```
 exertion_lvl/
 ├── src/                    # 源代码目录
-│   └── data/              # 数据处理模块
-│       ├── clean_data.py          # 音频数据清理
-│       ├── segment_audio.py       # 音频分段处理
-│       ├── extract_labels.py      # 标签提取
-│       ├── get_features.py        # wav2vec2特征提取
-│       ├── loader.py              # 数据加载器
-│       └── process_data.py        # 数据处理主流程
+│   ├── data/              # 数据处理模块
+│   │   ├── clean_data.py          # 音频数据清理
+│   │   ├── segment_audio.py       # 音频分段处理
+│   │   ├── extract_labels.py      # 标签提取
+│   │   ├── get_features.py        # wav2vec2特征提取
+│   │   ├── loader.py              # 数据加载器
+│   │   ├── process_data.py        # 数据处理主流程
+│   │   ├── normalizer.py          # 特征标准化
+│   │   ├── normalizer_memory_efficient.py # 内存高效标准化
+│   │   └── balancer.py            # 数据平衡器
+│   ├── models/            # 模型定义
+│   │   └── vgg16_exertion.py      # VGG16运动强度检测模型
+│   ├── training/          # 训练模块
+│   ├── evaluation/        # 评估模块
+│   ├── utils/             # 工具模块
+│   │   ├── config_manager.py      # 配置管理
+│   │   ├── wandb_manager.py       # WandB管理
+│   │   ├── data_leakage_checker.py # 数据泄露检查
+│   │   └── set_seed.py            # 随机种子设置
+│   ├── train.py           # 主训练脚本
+│   ├── train_with_config.py       # 配置文件训练脚本
+│   └── evaluate.py        # 结果评估脚本
 ├── test/                   # 测试文件
-│   ├── monitor_gpu.py             # GPU监控工具
-│   └── test_rtx4070_optimization.py # RTX4070优化测试
+├── config/                 # 配置文件
 ├── data/                   # 数据目录
 │   ├── audio/                     # 原始音频文件
 │   ├── general_information.csv    # 基本信息文件
 │   └── data_README.md             # 数据说明文档
+├── result/                 # 训练结果（包含在git中）
+├── scripts/                # 脚本文件
+├── docs/                   # 文档
 ├── requirements.txt        # Python依赖包
 └── README.md              # 项目说明文档
 ```
@@ -82,10 +99,10 @@ process_data_pipeline()
 
 ```bash
 # 使用配置文件版本（推荐）
-python src/main_train_config.py --config config/vgg16_wav2vec2_layer4_mfcc_exertion.yaml
+python src/train_with_config.py --config config/vgg16_wav2vec2_layer4_mfcc_exertion.yaml
 
 # 或者使用基础版本
-python src/main_train.py
+python src/train.py
 ```
 
 ### 4. 查看训练进度
@@ -94,13 +111,22 @@ python src/main_train.py
 2. 访问 [https://wandb.ai](https://wandb.ai) 查看可视化仪表板
 3. 监控GPU使用率、系统资源和训练指标
 
-### 5. GPU监控
+### 5. 结果评估
 
-```python
-from test.monitor_gpu import monitor_gpu_usage
+```bash
+# 评估最新训练结果
+python src/evaluate.py
+```
 
-# 监控GPU使用情况
-monitor_gpu_usage()
+### 6. GPU监控
+
+```bash
+# 安装nvtop（推荐）
+sudo apt install nvtop
+nvtop
+
+# 或者使用Python监控
+python -c "import torch; print(f'GPU可用: {torch.cuda.is_available()}')"
 ```
 
 ## 技术特点
