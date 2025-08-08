@@ -171,6 +171,10 @@ class ConfigManager:
             },
         }
     
+    def get_full_config(self) -> Dict[str, Any]:
+        """获取完整配置（包含所有节）"""
+        return self.config.copy()
+    
     def get_model_config(self) -> Dict[str, Any]:
         """获取模型配置"""
         return {

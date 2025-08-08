@@ -137,11 +137,11 @@ def train_model(config: ConfigManager, dataset):
     """训练模型"""
     print("开始模型训练...")
     
-    # 获取训练配置
-    training_config = config.get_training_config()
+    # 获取完整配置（包含数据和训练配置）
+    full_config = config.get_full_config()
     
     # 创建训练器
-    trainer = ExertionTrainer(training_config)
+    trainer = ExertionTrainer(full_config)
     
     # 保存配置
     config.save_config(os.path.join(trainer.result_dir, "config.yaml"))
@@ -154,7 +154,7 @@ def train_model(config: ConfigManager, dataset):
     print(f"可训练参数数量: {param_info['trainable_params_millions']:.2f}M")
     
     # 5折交叉验证训练
-    cv_results = trainer.cross_validation_train(dataset, training_config)
+    cv_results = trainer.cross_validation_train(dataset, full_config)
     
     return trainer, cv_results
 

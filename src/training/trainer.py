@@ -310,9 +310,9 @@ class ExertionTrainer:
         patience_counter = 0
         patience = self.config.get('patience', 20)
         
-        for epoch in range(config['epochs']):
+        for epoch in range(config.get('training', {}).get('epochs', 15)):
             print(f"\n{'='*60}")
-            print(f"Epoch {epoch + 1}/{config['epochs']} - Fold {fold_idx + 1}/5")
+            print(f"Epoch {epoch + 1}/{config.get('training', {}).get('epochs', 15)} - Fold {fold_idx + 1}/5")
             print(f"{'='*60}")
             
             # 记录开始时间
@@ -337,7 +337,7 @@ class ExertionTrainer:
                     scheduler.step()
             
             # 记录指标到WandB
-            global_step = epoch + fold_idx * config['epochs']
+            global_step = epoch + fold_idx * config.get('training', {}).get('epochs', 15)
             self.wandb_manager.log_training_metrics({
                 'loss': train_loss,
                 'accuracy': train_acc
@@ -430,7 +430,7 @@ class ExertionTrainer:
                 patience_counter += 1
             
             # 保存最终模型（如果与最佳模型不同）
-            if epoch == config['epochs'] - 1 or patience_counter >= patience:
+            if epoch == config.get('training', {}).get('epochs', 15) - 1 or patience_counter >= patience:
                 final_epoch = epoch
                 if final_epoch != best_epoch:
                     final_model_path = os.path.join(self.result_dir, "models", f"fold_{fold_idx + 1}_final.pth")
@@ -464,30 +464,30 @@ class ExertionTrainer:
         # 处理嵌套配置结构
         if 'data' in config and key in ['feature_dir', 'use_mfcc', 'use_mfb', 'use_wav2vec2', 'wav2vec2_layers']:
             if key == 'feature_dir':
-                return config['data']['feature_dir']
+                return config['data'].get('feature_dir', default)
             elif key == 'use_mfcc':
-                return config['data']['features']['use_mfcc']
+                return config['data'].get('features', {}).get('use_mfcc', default)
             elif key == 'use_mfb':
-                return config['data']['features']['use_mfb']
+                return config['data'].get('features', {}).get('use_mfb', default)
             elif key == 'use_wav2vec2':
-                return config['data']['features']['use_wav2vec2']
+                return config['data'].get('features', {}).get('use_wav2vec2', default)
             elif key == 'wav2vec2_layers':
-                return config['data']['wav2vec2_layers']
+                return config['data'].get('wav2vec2_layers', default)
         return config.get(key, default)
     
     def cross_validation_train(self, dataset, config):
         """交叉验证训练（支持单Fold）"""
-        n_folds = config.get('n_folds')
+        n_folds = config.get('training', {}).get('n_folds')
         if n_folds is None:
-            raise ValueError("配置文件中必须指定 'n_folds' 参数")
+            raise ValueError("配置文件中必须指定 'training.n_folds' 参数")
             
         if n_folds == 1:
             print("开始单Fold训练")
         else:
             print(f"开始{n_folds}折交叉验证训练")
-        print(f"总epoch数: {config['epochs']}")
-        print(f"Batch大小: {config.get('batch_size', 8)}")
-        print(f"学习率: {config.get('learning_rate', 1e-4)}")
+        print(f"总epoch数: {config.get('training', {}).get('epochs', 15)}")
+        print(f"Batch大小: {config.get('training', {}).get('batch_size', 8)}")
+        print(f"学习率: {config.get('training', {}).get('learning_rate', 1e-4)}")
         print(f"设备: {self.device}")
         if torch.cuda.is_available():
             print(f"GPU: {torch.cuda.get_device_name(0)}")
@@ -543,9 +543,9 @@ class ExertionTrainer:
                 all_labels.append(0)  # 默认标签
         
         # 交叉验证设置
-        n_folds = config.get('n_folds')
+        n_folds = config.get('training', {}).get('n_folds')
         if n_folds is None:
-            raise ValueError("配置文件中必须指定 'n_folds' 参数")
+            raise ValueError("配置文件中必须指定 'training.n_folds' 参数")
             
         if n_folds == 1:
             # 单Fold训练：使用基于clip的分层分割
@@ -731,12 +731,12 @@ class ExertionTrainer:
             use_mfb=self._get_config_value(config, 'use_mfb', True),
             use_embed=self._get_config_value(config, 'use_wav2vec2', True),
             selected_wav2vec2_layers=self._get_config_value(config, 'wav2vec2_layers', [4]),
-            batch_size=config.get('batch_size'),
+            batch_size=config.get('training', {}).get('batch_size', 32),
             shuffle=shuffle,
-            num_workers=config.get('num_workers'),
-            pin_memory=config.get('pin_memory'),
-            persistent_workers=config.get('persistent_workers'),
-            prefetch_factor=config.get('prefetch_factor')
+            num_workers=config.get('training', {}).get('num_workers', 4),
+            pin_memory=config.get('training', {}).get('pin_memory', False),
+            persistent_workers=config.get('training', {}).get('persistent_workers', False),
+            prefetch_factor=config.get('training', {}).get('prefetch_factor', 2)
         )
     
     def _create_model(self, config):
