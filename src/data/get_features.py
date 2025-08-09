@@ -1,561 +1,169 @@
-# --- Optimized Feature Extraction for RTX 4070 with Exertion Level Labels ---
-import torch
-import torch.nn.functional as F
-import torchaudio
-import torchaudio.transforms as T
-import numpy as np
+#!/usr/bin/env python3
+"""
+Feature extraction script
+Extract features for training and test sets
+"""
+
 import os
+import sys
+import torch
+import torchaudio
+import numpy as np
 import pandas as pd
+from transformers import Wav2Vec2Model, Wav2Vec2FeatureExtractor
 from tqdm import tqdm
-from transformers import Wav2Vec2Processor, Wav2Vec2Model
 import librosa
-import torchaudio.compliance.kaldi as kaldi
-from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
-import multiprocessing as mp
-from functools import partial
+import soundfile as sf
 
-# Global variables for model loading (loaded once per process)
-processor = None
-model = None
-device = None
+def extract_mfcc_features(audio_path, sr=16000, n_mfcc=20, hop_length=320):
+    """Extract MFCC features from audio file"""
+    # Load audio
+    y, sr_orig = sf.read(audio_path)
+    if sr_orig != sr:
+        y = torchaudio.functional.resample(torch.tensor(y), orig_freq=sr_orig, new_freq=sr).numpy()
+    
+    # Extract MFCC with optimized parameters
+    mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=n_mfcc, hop_length=hop_length, n_fft=1024)
+    return mfcc.T  # Transpose to get (time, features)
 
-def initialize_wav2vec2_model():
-    """Initialize Wav2Vec2 model on GPU - optimized for RTX 4070"""
-    global processor, model, device
-    if model is None:
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        processor = Wav2Vec2Processor.from_pretrained("facebook/wav2vec2-base", cache_dir=".cache")
-        model = Wav2Vec2Model.from_pretrained("facebook/wav2vec2-base", cache_dir=".cache", output_hidden_states=True)
-        model = model.to(device)
-        model.eval()
-        
-        # Enable optimizations for RTX 4070 (Ada Lovelace architecture)
-        if hasattr(torch.backends.cudnn, 'benchmark'):
-            torch.backends.cudnn.benchmark = True
-        if hasattr(torch.backends.cudnn, 'enabled'):
-            torch.backends.cudnn.enabled = True
-        
-        # Enable memory efficient attention if available (for Ada Lovelace)
-        if hasattr(torch.backends.cuda, 'enable_flash_sdp'):
-            torch.backends.cuda.enable_flash_sdp(True)
-        if hasattr(torch.backends.cuda, 'enable_mem_efficient_sdp'):
-            torch.backends.cuda.enable_mem_efficient_sdp(True)
-        
-        # Set memory fraction to prevent OOM on 12GB RTX 4070
-        if torch.cuda.is_available():
-            torch.cuda.set_per_process_memory_fraction(0.95)  # Use 95% of available memory
 
-def get_optimal_batch_size():
-    """Determine optimal batch size based on GPU memory - optimized for RTX 4070"""
+
+def extract_wav2vec2_features(audio_path, model, feature_extractor, target_frames=300):
+    """Extract wav2vec2 features from audio file"""
+    # Load audio
+    y, sr_orig = sf.read(audio_path)
+    if sr_orig != 16000:
+        y = torchaudio.functional.resample(torch.tensor(y), orig_freq=sr_orig, new_freq=16000).numpy()
+    
+    # Prepare input for wav2vec2
+    inputs = feature_extractor(y, sampling_rate=16000, return_tensors="pt")
+    
+    # Move inputs to the same device as model
+    device = next(model.parameters()).device
+    inputs = {k: v.to(device) for k, v in inputs.items()}
+    
+    # Extract features
+    with torch.no_grad():
+        outputs = model(**inputs, output_hidden_states=True)
+        # Use layer 4 features (index 4)
+        features = outputs.hidden_states[4].squeeze(0)  # Remove batch dimension
+    
+    # Resample to target frames if necessary
+    if features.shape[0] != target_frames:
+        features = torch.nn.functional.interpolate(
+            features.unsqueeze(0).transpose(1, 2), 
+            size=target_frames, 
+            mode='linear'
+        ).squeeze(0).transpose(0, 1)
+    
+    # Move to CPU and convert to numpy
+    return features.cpu().numpy()
+
+def extract_features_for_dataset(audio_dir, output_dir, labels_file, description, batch_size=32):
+    """Extract features for specified dataset"""
+    
+    print(f"\nStarting {description} feature extraction...")
+    
+    # Check input directories
+    if not os.path.exists(audio_dir):
+        print(f"ERROR: Audio directory {audio_dir} does not exist")
+        return False
+    
+    if not os.path.exists(labels_file):
+        print(f"ERROR: Label file {labels_file} does not exist")
+        return False
+    
+    # Create output directory
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Get audio file list
+    audio_files = [f for f in os.listdir(audio_dir) if f.endswith('.wav')]
+    
+    if not audio_files:
+        print(f"{description} audio directory is empty")
+        return False
+    
+    print(f"Found {len(audio_files)} audio files")
+    
+    # Load wav2vec2 model
+    print("Loading wav2vec2 model...")
+    model_name = "facebook/wav2vec2-base"
+    model = Wav2Vec2Model.from_pretrained(model_name)
+    feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(model_name)
+    
     if torch.cuda.is_available():
-        gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3  # GB
-        if gpu_memory >= 24:  # RTX 4090/4080/3090/3080 Ti
-            return 8
-        elif gpu_memory >= 16:  # RTX 4080/3080
-            return 6
-        elif gpu_memory >= 12:  # RTX 4070 Ti/4070/3080
-            return 4  # 增加批处理大小
-        elif gpu_memory >= 8:   # RTX 3070/3060 Ti
-            return 3
-        else:
-            return 2
-    return 2
-
-def clear_gpu_cache():
-    """Clear GPU cache to prevent memory fragmentation on RTX 4070"""
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-        torch.cuda.synchronize()
-
-def get_memory_usage():
-    """Get current GPU memory usage for monitoring"""
-    if torch.cuda.is_available():
-        allocated = torch.cuda.memory_allocated() / 1024**3  # GB
-        cached = torch.cuda.memory_reserved() / 1024**3     # GB
-        total = torch.cuda.get_device_properties(0).total_memory / 1024**3  # GB
-        return {
-            'allocated_gb': allocated,
-            'cached_gb': cached,
-            'total_gb': total,
-            'free_gb': total - cached
-        }
-    return None
-
-# --- Optimized Acoustic Features (GPU accelerated) ---
-class OptimizedAcousticExtractor:
-    def __init__(self, device='cuda'):
-        self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
-        
-    def extract_all_features_batch(self, audio_batch, sr=16000, target_frames=300):
-        """Extract all acoustic features in a single GPU batch operation"""
-        if isinstance(audio_batch, np.ndarray):
-            audio_batch = torch.tensor(audio_batch, dtype=torch.float32, device=self.device)
-        elif isinstance(audio_batch, list):
-            # Pad sequences to same length
-            max_len = max(len(a) for a in audio_batch)
-            padded = []
-            for audio in audio_batch:
-                if isinstance(audio, np.ndarray):
-                    audio = torch.tensor(audio, dtype=torch.float32)
-                if len(audio) < max_len:
-                    audio = F.pad(audio, (0, max_len - len(audio)))
-                padded.append(audio)
-            audio_batch = torch.stack(padded).to(self.device)
-        
-        if audio_batch.dim() == 1:
-            audio_batch = audio_batch.unsqueeze(0)
-        
-        batch_size = audio_batch.shape[0]
-        results = []
-        
-        for i in range(batch_size):
-            audio = audio_batch[i]
-            features = self._extract_single_audio_features(audio, sr, target_frames)
-            results.append(features)
-            
-        return results
-    
-    def _extract_single_audio_features(self, audio, sr, target_frames):
-        """Extract features for single audio on GPU"""
-        audio_length = audio.shape[-1]
-        hop_length = max(1, audio_length // target_frames)
-        
-        # All computations on GPU
-        features = {}
-        
-        # 1. MFB (Mel Filter Bank) using Kaldi
-        if audio.dim() == 1:
-            audio_2d = audio.unsqueeze(0)
-        else:
-            audio_2d = audio
-            
-        mfb = kaldi.fbank(
-            waveform=audio_2d,
-            num_mel_bins=40,
-            sample_frequency=sr,
-            frame_length=25.0,
-            frame_shift=hop_length * 1000 / sr,
-            dither=0.0,
-            energy_floor=0.0,
-            use_energy=False
-        )
-        features['mfb'] = self._align_frames(mfb, target_frames)
-        
-        # 2. MFCC using torchaudio (GPU accelerated)
-        mfcc_transform = T.MFCC(
-            sample_rate=sr,
-            n_mfcc=40,
-            melkwargs={
-                "n_fft": 1024,
-                "hop_length": hop_length,
-                "n_mels": 128,
-                "f_max": 8000
-            }
-        ).to(self.device)
-        
-        mfcc = mfcc_transform(audio.unsqueeze(0)).squeeze(0).T
-        features['mfcc'] = self._align_frames(mfcc, target_frames)
-        
-        # 3. Mel Spectrogram
-        mel_transform = T.MelSpectrogram(
-            sample_rate=sr,
-            n_fft=1024,
-            hop_length=hop_length,
-            n_mels=40,
-            f_max=8000
-        ).to(self.device)
-        
-        mel_spec = mel_transform(audio.unsqueeze(0)).squeeze(0).T
-        features['mel'] = self._align_frames(mel_spec, target_frames)
-        
-        # 4. RMS Energy (vectorized)
-        # Reshape audio for frame-wise RMS
-        n_frames = audio_length // hop_length
-        if n_frames > 0:
-            frames = audio[:n_frames * hop_length].view(n_frames, hop_length)
-            rms = torch.sqrt(torch.mean(frames ** 2, dim=1, keepdim=True))
-            features['rms'] = self._align_frames(rms, target_frames)
-        else:
-            features['rms'] = torch.zeros(target_frames, 1, device=self.device)
-        
-        # 5. PSD (Power Spectral Density)
-        stft = torch.stft(
-            audio,
-            n_fft=1024,
-            hop_length=hop_length,
-            window=torch.hann_window(1024, device=self.device),
-            return_complex=True
-        )
-        power_spectrum = (stft.abs() ** 2)
-        psd = power_spectrum.sum(dim=0, keepdim=True).T
-        features['psd'] = self._align_frames(psd, target_frames)
-        
-        # Convert to numpy and combine
-        for key in features:
-            features[key] = features[key].cpu().numpy()
-            
-        # Combine features
-        combined = np.concatenate([
-            features['mfb'], features['mel'], features['mfcc'], 
-            features['rms'], features['psd']
-        ], axis=1)
-        features['combined'] = combined
-        
-        return features
-    
-    def _align_frames(self, feature, target_frames):
-        """Align feature tensor to target frames"""
-        current_frames = feature.shape[0]
-        if current_frames == target_frames:
-            return feature
-        elif current_frames < target_frames:
-            # Pad with last frame
-            pad_length = target_frames - current_frames
-            if feature.dim() == 1:
-                last_frame = feature[-1:].repeat(pad_length)
-                return torch.cat([feature, last_frame], dim=0)
-            else:
-                last_frame = feature[-1:].repeat(pad_length, 1)
-                return torch.cat([feature, last_frame], dim=0)
-        else:
-            # Truncate or interpolate
-            if current_frames <= target_frames * 1.5:  # Close enough, just truncate
-                return feature[:target_frames]
-            else:  # Downsample using interpolation
-                return F.interpolate(
-                    feature.T.unsqueeze(0), 
-                    size=target_frames, 
-                    mode='linear', 
-                    align_corners=False
-                ).squeeze(0).T
-
-# --- Optimized Wav2Vec2 extraction with batching for RTX 4070 ---
-def extract_wav2vec2_features_batch(audio_list, sr_list, selected_layers=(4,), sr_target=16000, batch_size=None, target_frames=300):
-    """Extract Wav2Vec2 features in batches - optimized for RTX 4070 memory management"""
-    initialize_wav2vec2_model()
-    
-    if batch_size is None:
-        batch_size = get_optimal_batch_size()
-    
-    # Clear GPU cache before processing
-    clear_gpu_cache()
-    
-    # Resample all audio to target sr and prepare batches
-    processed_audio = []
-    for audio, sr in zip(audio_list, sr_list):
-        if sr != sr_target:
-            audio_tensor = torch.tensor(audio, dtype=torch.float32)
-            audio = torchaudio.functional.resample(audio_tensor, sr, sr_target).numpy()
-        processed_audio.append(audio)
-    
-    results = []
-    
-    # Process in batches
-    for i in range(0, len(processed_audio), batch_size):
-        batch_audio = processed_audio[i:i + batch_size]
-        
-        # Find max length in batch and pad
-        max_len = max(len(audio) for audio in batch_audio)
-        padded_batch = []
-        attention_masks = []
-        
-        for audio in batch_audio:
-            padded = np.pad(audio, (0, max_len - len(audio)), mode='constant')
-            padded_batch.append(padded)
-            # Create attention mask
-            mask = np.ones(len(audio))
-            mask = np.pad(mask, (0, max_len - len(audio)), mode='constant')
-            attention_masks.append(mask)
-        
-        # Process batch
-        inputs = processor(
-            padded_batch, 
-            sampling_rate=sr_target, 
-            return_tensors="pt", 
-            padding=True
-        )
-        
-        # Move to GPU
-        inputs = {k: v.to(device) for k, v in inputs.items()}
-        
-        with torch.no_grad():
-            # Use autocast for mixed precision
-            with torch.cuda.amp.autocast():
-                outputs = model(**inputs)
-            
-            # Extract selected layers for each audio in batch
-            for j, audio_idx in enumerate(range(len(batch_audio))):
-                audio_results = []
-                for layer_idx in selected_layers:
-                    # Get the embeddings for this audio (remove padding)
-                    original_length = len(processed_audio[i + j])
-                    # Calculate the corresponding length in the feature space
-                    feature_length = outputs.hidden_states[layer_idx].shape[1]
-                    audio_feature_length = int(feature_length * len(processed_audio[i + j]) / max_len)
-                    
-                    layer_features = outputs.hidden_states[layer_idx][j, :audio_feature_length].cpu().numpy()
-                    
-                    # 对齐到目标帧数
-                    if len(layer_features) != target_frames:
-                        if len(layer_features) < target_frames:
-                            # 填充
-                            pad_length = target_frames - len(layer_features)
-                            layer_features = np.pad(layer_features, ((0, pad_length), (0, 0)), mode='edge')
-                        else:
-                            # 截断
-                            layer_features = layer_features[:target_frames]
-                    
-                    audio_results.append(layer_features)
-                results.append(audio_results)
-        
-        # Clear GPU cache after each batch to prevent memory accumulation
-        clear_gpu_cache()
-    
-    return results
-
-def load_and_resample_audio_optimized(wav_path, sr_target=16000):
-    """Optimized audio loading with GPU acceleration - memory efficient for RTX 4070"""
-    waveform, sr = torchaudio.load(wav_path)
-    
-    if waveform.ndim > 1 and waveform.shape[0] > 1:
-        waveform = torch.mean(waveform, dim=0, keepdim=True)
-    
-    if sr != sr_target:
-        # Use GPU for resampling if available
-        if torch.cuda.is_available():
-            waveform = waveform.cuda()
-            waveform = torchaudio.functional.resample(waveform, sr, sr_target)
-            waveform = waveform.cpu()
-            # Clear GPU cache after resampling
-            clear_gpu_cache()
-        else:
-            waveform = torchaudio.functional.resample(waveform, sr, sr_target)
-    
-    return waveform.squeeze(0).numpy(), sr_target
-
-def process_single_file_with_labels(args):
-    """Process a single file with exertion level labels - used for multiprocessing"""
-    fname, audio_dir, features_dir, labels_df, sr_target, sr_feature, selected_layers = args
-    
-    session_id = os.path.splitext(fname)[0]
-    wav_path = os.path.join(audio_dir, fname)
-    session_dir = os.path.join(features_dir, session_id)
-    wav2vec_dir = os.path.join(session_dir, "wav2vec2")
-    os.makedirs(session_dir, exist_ok=True)
-    os.makedirs(wav2vec_dir, exist_ok=True)
-    
-    try:
-        # Load audio
-        y, sr = load_and_resample_audio_optimized(wav_path, sr_target)
-        
-        # 固定目标帧数为300，对应20Hz采样率下的15秒音频
-        target_frames = 300
-        
-        # Extract acoustic features using GPU
-        acoustic_extractor = OptimizedAcousticExtractor()
-        features = acoustic_extractor.extract_all_features_batch([y], sr, target_frames)[0]
-        
-        # Save acoustic features
-        for feature_name, feature_data in features.items():
-            if feature_name != 'combined':  # Save individual features
-                np.save(os.path.join(session_dir, f"{feature_name}.npy"), feature_data)
-        
-        # Extract Wav2Vec2 features
-        wav2vec_features = extract_wav2vec2_features_batch([y], [sr], selected_layers, sr_target, batch_size=1, target_frames=target_frames)[0]
-        
-        # 确保wav2vec2特征也统一到300帧
-        for i, (actual_layer_idx, layer_features) in enumerate(zip(selected_layers, wav2vec_features)):
-            # 对齐到300帧
-            if len(layer_features) != target_frames:
-                if len(layer_features) < target_frames:
-                    # 填充
-                    pad_length = target_frames - len(layer_features)
-                    layer_features = np.pad(layer_features, ((0, pad_length), (0, 0)), mode='edge')
-                else:
-                    # 截断
-                    layer_features = layer_features[:target_frames]
-            
-            np.save(os.path.join(wav2vec_dir, f"wav2vec2_layer{actual_layer_idx}.npy"), layer_features)
-        
-        # Save exertion level label if available
-        if labels_df is not None:
-            label_row = labels_df[labels_df['segment_id'] == session_id]
-            if not label_row.empty:
-                exertion_level = label_row['exertion_level'].iloc[0]
-                np.save(os.path.join(session_dir, "exertion_level.npy"), exertion_level)
-        
-        return f"Success: {session_id}"
-        
-    except Exception as e:
-        return f"Failed on {session_id}: {e}"
-
-def generate_feature_dir_with_labels(audio_dir, features_dir, labels_df=None, sr_target=16000, sr_feature=20, 
-                                   max_files=None, selected_layers=(4,), 
-                                   n_processes=None, batch_processing=False):
-    """
-    Optimized feature generation with exertion level labels
-    Optimized for RTX 4070 with memory management
-    """
-    os.makedirs(features_dir, exist_ok=True)
-    
-    # Initialize GPU and clear cache
-    if torch.cuda.is_available():
-        clear_gpu_cache()
-        print(f"GPU Memory Usage: {get_memory_usage()}")
-    
-    if max_files is not None:
-        filenames = sorted([f for f in os.listdir(audio_dir) if f.endswith(".wav")])[:max_files]
+        model = model.cuda()
+        print("Using GPU for feature extraction")
     else:
-        filenames = sorted([f for f in os.listdir(audio_dir) if f.endswith(".wav")])
+        print("Using CPU for feature extraction")
     
-    if n_processes is None:
-        n_processes = min(mp.cpu_count() // 2, 6)  # 增加进程数
+    # Load labels
+    labels_df = pd.read_csv(labels_file)
     
-    print(f"处理 {len(filenames)} 个音频文件...")
-    if labels_df is not None:
-        print(f"包含 {len(labels_df)} 个exertion level标签")
-    
-    if batch_processing and len(filenames) > 10:
-        # Batch processing mode - better for many small files
-        process_files_in_batches_with_labels(filenames, audio_dir, features_dir, labels_df, sr_target, sr_feature, selected_layers)
-    else:
-        # Multiprocessing mode - better for fewer large files
-        args_list = [
-            (fname, audio_dir, features_dir, labels_df, sr_target, sr_feature, selected_layers)
-            for fname in filenames
-        ]
+    # Extract features
+    extracted_count = 0
+    for audio_file in tqdm(audio_files, desc=f"Extracting {description} features"):
+        segment_id = audio_file.replace('.wav', '')
+        audio_path = os.path.join(audio_dir, audio_file)
         
-        with ProcessPoolExecutor(max_workers=n_processes) as executor:
-            results = list(tqdm(executor.map(process_single_file_with_labels, args_list), 
-                              total=len(args_list), desc="Processing files"))
-        
-        # Print results
-        success_count = 0
-        for result in results:
-            if result.startswith("Success"):
-                success_count += 1
-            print(result)
-        
-        print(f"\n处理完成: {success_count}/{len(filenames)} 个文件成功")
-
-def process_files_in_batches_with_labels(filenames, audio_dir, features_dir, labels_df, sr_target, sr_feature, selected_layers):
-    """Process files in GPU batches with labels for maximum efficiency - optimized for RTX 4070"""
-    batch_size = get_optimal_batch_size()
-    print(f"Using batch size: {batch_size} for RTX 4070")
-    initialize_wav2vec2_model()
-    acoustic_extractor = OptimizedAcousticExtractor()
-    
-    for i in tqdm(range(0, len(filenames), batch_size), desc="Processing batches"):
-        batch_files = filenames[i:i + batch_size]
-        
-        # Monitor memory usage every few batches
-        if i % (batch_size * 5) == 0 and torch.cuda.is_available():
-            mem_info = get_memory_usage()
-            print(f"Batch {i//batch_size}: GPU Memory - {mem_info['allocated_gb']:.2f}GB allocated, {mem_info['free_gb']:.2f}GB free")
-        
-        # Load batch of audio files
-        audio_batch = []
-        sr_batch = []
-        session_ids = []
-        target_frames_batch = []
-        
-        for fname in batch_files:
-            session_id = os.path.splitext(fname)[0]
-            wav_path = os.path.join(audio_dir, fname)
-            session_ids.append(session_id)
-            
-            try:
-                y, sr = load_and_resample_audio_optimized(wav_path, sr_target)
-                # 从配置文件获取目标帧数，默认为300
-                target_frames = 300  # 这里应该从配置文件读取，暂时保持默认值
-                
-                audio_batch.append(y)
-                sr_batch.append(sr)
-                target_frames_batch.append(target_frames)
-                
-            except Exception as e:
-                print(f"Failed to load {session_id}: {e}")
-                continue
-        
-        if not audio_batch:
+        # Check if label exists
+        if segment_id not in labels_df['segment_id'].values:
+            print(f"WARNING: No label found for {segment_id}")
             continue
         
-        # Process acoustic features in batch
         try:
-            # For now, process individually due to different target_frames
-            # Could be optimized further by grouping by similar target_frames
-            for j, (audio, sr, target_frames, session_id) in enumerate(zip(audio_batch, sr_batch, target_frames_batch, session_ids)):
-                session_dir = os.path.join(features_dir, session_id)
-                wav2vec_dir = os.path.join(session_dir, "wav2vec2")
-                os.makedirs(session_dir, exist_ok=True)
-                os.makedirs(wav2vec_dir, exist_ok=True)
-                
-                # Acoustic features
-                features = acoustic_extractor.extract_all_features_batch([audio], sr, target_frames)[0]
-                for feature_name, feature_data in features.items():
-                    if feature_name != 'combined':
-                        np.save(os.path.join(session_dir, f"{feature_name}.npy"), feature_data)
-                
-                # Save exertion level label if available
-                if labels_df is not None:
-                    label_row = labels_df[labels_df['segment_id'] == session_id]
-                    if not label_row.empty:
-                        exertion_level = label_row['exertion_level'].iloc[0]
-                        np.save(os.path.join(session_dir, "exertion_level.npy"), exertion_level)
+            # Extract MFCC features
+            mfcc_features = extract_mfcc_features(audio_path)
             
-            # Process Wav2Vec2 in batch
-            wav2vec_results = extract_wav2vec2_features_batch(audio_batch, sr_batch, selected_layers, sr_target, target_frames=target_frames)
+            # Extract wav2vec2 features
+            wav2vec2_features = extract_wav2vec2_features(audio_path, model, feature_extractor)
             
-            # Save Wav2Vec2 results
-            for session_id, wav2vec_features in zip(session_ids, wav2vec_results):
-                wav2vec_dir = os.path.join(features_dir, session_id, "wav2vec2")
-                for actual_layer_idx, layer_features in zip(selected_layers, wav2vec_features):
-                    np.save(os.path.join(wav2vec_dir, f"wav2vec2_layer{actual_layer_idx}.npy"), layer_features)
+            # Save features
+            feature_file = os.path.join(output_dir, f"{segment_id}.npz")
+            np.savez_compressed(
+                feature_file,
+                mfcc=mfcc_features,
+                wav2vec2=wav2vec2_features
+            )
+            
+            extracted_count += 1
             
         except Exception as e:
-            print(f"Batch processing failed: {e}")
+            print(f"ERROR: Failed to extract features for {segment_id}: {e}")
             continue
 
-if __name__ == "__main__":
-    import multiprocessing as mp
-    mp.set_start_method('spawn', force=True)
+    print(f"{description} feature extraction completed!")
+    print(f"Successfully extracted features for {extracted_count} files")
+    print(f"Features saved to: {output_dir}")
     
-    print("开始特征提取 (RTX 4070优化 + Exertion Level标签)...")
+    return True
+
+def main():
+    """Main function"""
+    print("=== Feature Extraction ===")
     
-    # Check GPU availability
-    print(f"CUDA available: {torch.cuda.is_available()}")
-    if torch.cuda.is_available():
-        print(f"GPU: {torch.cuda.get_device_name(0)}")
-        print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
+    # Training set feature extraction
+    train_success = extract_features_for_dataset(
+        audio_dir="data/train_set/segmented_audio",
+        output_dir="data/train_set/features",
+        labels_file="data/train_set/segment_exertion_labels.csv",
+        description="Training Set"
+    )
     
-    # 检查输入目录
-    audio_dir = "data/segmented_audio"
-    features_dir = "data/features"
+    # Test set feature extraction
+    test_success = extract_features_for_dataset(
+        audio_dir="data/test_set/segmented_audio",
+        output_dir="data/test_set/features",
+        labels_file="data/test_set/segment_exertion_labels.csv",
+        description="Test Set"
+    )
     
-    if not os.path.exists(audio_dir):
-        print(f"错误: 音频目录 {audio_dir} 不存在")
-        print("请先运行数据清洗和分段步骤")
-        exit(1)
-    
-    # 加载exertion level标签
-    labels_path = "data/segment_exertion_labels.csv"
-    labels_df = None
-    if os.path.exists(labels_path):
-        labels_df = pd.read_csv(labels_path)
-        print(f"加载exertion level标签: {len(labels_df)} 个标签")
+    if train_success and test_success:
+        print("\n=== Feature Extraction Completed ===")
+        print("Training features: data/train_set/features/")
+        print("Test features: data/test_set/features/")
     else:
-        print("警告: 标签文件不存在，将不包含exertion level标签")
-    
-    print(f"从 {audio_dir} 提取特征到 {features_dir}")
-    
-    generate_feature_dir_with_labels(
-        audio_dir=audio_dir,
-        features_dir=features_dir,
-        labels_df=labels_df,
-        sr_target=16000,
-        sr_feature=20,
-        max_files=None,  # 处理所有文件
-        selected_layers=(4, 12),  # 提取第4层和第12层的特征
-        n_processes=6,  # 增加进程数以提高效率
-        batch_processing=True  # 使用批处理模式
-    ) 
+        print("\nERROR: Errors occurred during feature extraction")
+
+if __name__ == "__main__":
+    main()

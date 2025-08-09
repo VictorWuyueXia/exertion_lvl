@@ -1,397 +1,400 @@
+#!/usr/bin/env python3
+"""
+Data loader for exertion level detection
+Handles training and test set separation without data leakage
+"""
+
 import os
 import numpy as np
 import pandas as pd
-import soundfile as sf
-
 import torch
-import torchaudio
-from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import Dataset, DataLoader
-from src.utils.set_seed import seed_worker
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+import pickle
+import json
 
-# --- 1. Metadata extraction ---
-def get_session_metadata(feature_dir):
-    """从特征目录中提取会话元数据"""
-    session_metadata = []
+class NoLeakageAudioDataset(Dataset):
+    """
+    Audio dataset without data leakage
+    Supports MFCC and wav2vec2 features
+    """
     
-    if not os.path.exists(feature_dir):
-        print(f"特征目录不存在: {feature_dir}")
-        return pd.DataFrame(session_metadata)
-
-    for session_id in sorted(os.listdir(feature_dir)):
-        session_dir = os.path.join(feature_dir, session_id)
-        if not os.path.isdir(session_dir):
-            continue
-            
-        # 解析会话ID获取信息
-        parts = session_id.split("_")
-        if len(parts) >= 4:
-            participant_id = parts[1]
-            speed = parts[2]
-            task = parts[5] if len(parts) > 5 else "unknown"
-            stride = parts[-1] if len(parts) > 1 else "1"
-        else:
-            participant_id = "unknown"
-            speed = "unknown"
-            task = "unknown"
-            stride = "1"
-
-        session_metadata.append({
-            "session": session_id,
-            "participant": participant_id,
-            "speed": speed,
-            "task": task,
-            "stride": stride
-        })
-    
-    return pd.DataFrame(session_metadata)
-
-# --- 2. Dataset class ---
-class AudioFeatureDataset(Dataset):
-    def __init__(self, metadata_df, feature_dir, labels_df=None, use_acoustic=True, use_mfb=False, use_embed=False, selected_wav2vec2_layers=(4,)):
-        self.metadata_df = metadata_df.reset_index(drop=True)
+    def __init__(self, 
+                 audio_dir=None, 
+                 labels_file=None, 
+                 feature_dir=None,
+                 use_mfcc=True, 
+                 use_wav2vec2=True,
+                 wav2vec2_layers=[4, 8, 12],
+                 target_frames=300,
+                 transform=None):
+        """
+        Initialize dataset
+        
+        Args:
+            audio_dir: Audio file directory
+            labels_file: Label file path
+            feature_dir: Feature file directory (if None, extract features in real-time)
+            use_mfcc: Whether to use MFCC features
+            use_wav2vec2: Whether to use wav2vec2 features
+            wav2vec2_layers: wav2vec2 layer selection
+            target_frames: Target frame count
+            transform: Data transformation
+        """
+        self.audio_dir = audio_dir
+        self.labels_file = labels_file
         self.feature_dir = feature_dir
-        self.labels_df = labels_df
-        self.use_acoustic = use_acoustic
-        self.use_mfb = use_mfb
-        self.use_embed = use_embed
-        self.selected_wav2vec2_layers = selected_wav2vec2_layers    
-
+        self.use_mfcc = use_mfcc
+        self.use_wav2vec2 = use_wav2vec2
+        self.wav2vec2_layers = wav2vec2_layers
+        self.target_frames = target_frames
+        self.transform = transform
+        
+        # Check data format
+        if feature_dir and labels_file:
+            # Use pre-extracted feature format (.npz files)
+            self._load_npz_features()
+        elif audio_dir and labels_file:
+            # Use original audio format
+            self._load_audio_files()
+        else:
+            raise ValueError("Must provide feature_dir+labels_file or audio_dir+labels_file")
+    
+    def _load_npz_features(self):
+        """Load .npz format pre-extracted features"""
+        # Load labels
+        self.labels_df = pd.read_csv(self.labels_file)
+        
+        # Get feature file list
+        self.feature_files = []
+        for _, row in self.labels_df.iterrows():
+            segment_id = row['segment_id']
+            feature_file = os.path.join(self.feature_dir, f"{segment_id}.npz")
+            
+            if os.path.exists(feature_file):
+                self.feature_files.append({
+                    'segment_id': segment_id,
+                    'feature_file': feature_file,
+                    'exertion_level': row['exertion_level']
+                })
+        
+        print(f"Dataset loaded: {len(self.feature_files)} feature files")
+        
+        # Show label distribution
+        level_counts = self.labels_df['exertion_level'].value_counts().sort_index()
+        print("Label distribution:")
+        for level, count in level_counts.items():
+            print(f"  Level {level}: {count} samples")
+        
+        # Check class imbalance
+        min_samples = min(level_counts.values)
+        max_samples = max(level_counts.values)
+        imbalance_ratio = max_samples / min_samples if min_samples > 0 else float('inf')
+        if imbalance_ratio > 10:
+            print(f"\nWARNING: Severe class imbalance detected!")
+            print(f"  Ratio between most and least frequent classes: {imbalance_ratio:.1f}")
+            print(f"  Level {level_counts.idxmin()} has only {min_samples} samples")
+            print(f"  Consider using weighted loss or data augmentation")
+    
+    def _load_audio_files(self):
+        """Load original audio files"""
+        # Load labels
+        self.labels_df = pd.read_csv(self.labels_file)
+        
+        # Get audio file list
+        self.audio_files = []
+        for _, row in self.labels_df.iterrows():
+            segment_id = row['segment_id']
+            audio_file = os.path.join(self.audio_dir, f"{segment_id}.wav")
+            
+            if os.path.exists(audio_file):
+                self.audio_files.append({
+                    'segment_id': segment_id,
+                    'audio_file': audio_file,
+                    'exertion_level': row['exertion_level']
+                })
+        
+        print(f"Dataset loaded: {len(self.audio_files)} audio files")
+        
+        # Show label distribution
+        level_counts = self.labels_df['exertion_level'].value_counts().sort_index()
+        print("Label distribution:")
+        for level, count in level_counts.items():
+            print(f"  Level {level}: {count} samples")
+    
     def __len__(self):
-        return len(self.metadata_df)
-
+        if hasattr(self, 'feature_files'):
+            return len(self.feature_files)
+        else:
+            return len(self.audio_files)
+    
     def __getitem__(self, idx):
-        row = self.metadata_df.iloc[idx]
-        session_id = row["session"]
-        session_feature_dir = os.path.join(self.feature_dir, session_id)
+        if hasattr(self, 'feature_files'):
+            return self._get_npz_item(idx)
+        else:
+            return self._get_audio_item(idx)
+    
+    def _get_npz_item(self, idx):
+        """Get item from .npz feature file"""
+        item = self.feature_files[idx]
+        segment_id = item['segment_id']
+        feature_file = item['feature_file']
+        exertion_level = item['exertion_level']
         
         # Load features
-        acoustic = mfb = None
-        embeds = []
+        features = np.load(feature_file)
+        mfcc = features['mfcc'].astype(np.float32)
+        wav2vec2 = features['wav2vec2'].astype(np.float32)
         
-        if self.use_acoustic:
-            # 尝试加载MFCC特征
-            mfcc_path = os.path.join(session_feature_dir, "mfcc.npy")
-            if os.path.exists(mfcc_path):
-                acoustic = np.load(mfcc_path)  # (T1, D1)
-            else:
-                # 如果没有MFCC，尝试加载acoustic特征
-                acoustic_path = os.path.join(session_feature_dir, "acoustic.npy")
-                if os.path.exists(acoustic_path):
-                    acoustic = np.load(acoustic_path)  # (T1, D1)
-        
-        if self.use_mfb:
-            mfb_path = os.path.join(session_feature_dir, "mfb.npy")
-            if os.path.exists(mfb_path):
-                mfb = np.load(mfb_path)  # (T2, D2)
-            
-        if self.use_embed:
-            if self.selected_wav2vec2_layers and len(self.selected_wav2vec2_layers) > 1:
-                embed_list = []
-                for layer_id in self.selected_wav2vec2_layers:
-                    layer_path = os.path.join(session_feature_dir, f"wav2vec2/wav2vec2_layer{layer_id}.npy")
-                    if os.path.exists(layer_path):
-                        embed_list.append(np.load(layer_path))  # each shape: (T, D)
-                if embed_list:
-                    embeds = np.concatenate(embed_list, axis=1)  # shape: (T, D1 + D2)
-            else:
-                layer_id = self.selected_wav2vec2_layers[0] if self.selected_wav2vec2_layers else 4
-                layer_path = os.path.join(session_feature_dir, f"wav2vec2/wav2vec2_layer{layer_id}.npy")
-                if os.path.exists(layer_path):
-                    embeds = np.load(layer_path)
-
-        # 获取exertion level标签
-        exertion_level = None
-        if self.labels_df is not None:
-            # 从session_id中提取基础会话名（去掉stride后缀）
-            base_session_id = session_id.split('_stride_')[0] if '_stride_' in session_id else session_id
-            
-            # 在标签文件中查找匹配的会话
-            label_row = self.labels_df[self.labels_df['Session Name'] == base_session_id]
-            if not label_row.empty:
-                exertion_level = label_row['Exertion'].iloc[0] - 1  # 将1-5调整为0-4
-            else:
-                # 调试：打印不匹配的会话ID
-                print(f"警告: 找不到会话 {base_session_id} 的标签")
-        
-        # 检查是否有必要的特征和标签
-        if acoustic is None and embeds is None:
-            print(f"警告: 会话 {session_id} 没有有效特征")
-            return None
-            
-        if exertion_level is None:
-            print(f"警告: 会话 {session_id} 没有有效标签")
-            return None
+        # Convert to tensor
+        mfcc = torch.tensor(mfcc)
+        wav2vec2 = torch.tensor(wav2vec2)
+        # Convert labels from 1-5 to 0-4 for PyTorch
+        label = torch.tensor(exertion_level - 1, dtype=torch.long)
         
         return {
-            'session_id': session_id,
-            'acoustic': acoustic,
-            'mfb': mfb,
-            'embeds': embeds,
-            'exertion_level': exertion_level,
-            'metadata': row.to_dict()
+            'mfcc': mfcc,
+            'wav2vec2': wav2vec2,
+            'label': label,
+            'segment_id': segment_id
         }
-
-def collate_multi_feature_batch(batch):
-    """处理多特征批次的collate函数"""
-    # 过滤掉None值
-    valid_batch = [item for item in batch if item is not None]
     
-    if len(valid_batch) == 0:
-        print("警告: 批次中所有样本都无效")
-        return None
+    def _get_audio_item(self, idx):
+        """Get item from original audio file"""
+        item = self.audio_files[idx]
+        segment_id = item['segment_id']
+        audio_file = item['audio_file']
+        exertion_level = item['exertion_level']
+        
+        # Extract features in real-time
+        mfcc, wav2vec2 = self._extract_features_realtime(audio_file)
+        
+        # Convert to tensor
+        mfcc = torch.tensor(mfcc, dtype=torch.float32)
+        wav2vec2 = torch.tensor(wav2vec2, dtype=torch.float32)
+        # Convert labels from 1-5 to 0-4 for PyTorch
+        label = torch.tensor(exertion_level - 1, dtype=torch.long)
+        
+        return {
+            'mfcc': mfcc,
+            'wav2vec2': wav2vec2,
+            'label': label,
+            'segment_id': segment_id
+        }
     
-    def to_tensor_and_pad(seqs):
-        tensors = [torch.tensor(x, dtype=torch.float32) for x in seqs if x is not None]
-        if not tensors:
+    def _load_precomputed_features(self, session_id):
+        """Load precomputed features for a session"""
+        feature_file = os.path.join(self.feature_dir, f"{session_id}.npz")
+        
+        if os.path.exists(feature_file):
+            features = np.load(feature_file)
+            return features
+        else:
             return None
-        return pad_sequence(tensors, batch_first=True, padding_value=0.0)
     
-    # 收集所有特征
-    acoustic_features = [item['acoustic'] for item in valid_batch if item['acoustic'] is not None]
-    mfb_features = [item['mfb'] for item in valid_batch if item['mfb'] is not None]
-    embed_features = [item['embeds'] for item in valid_batch if item['embeds'] is not None]
+    def _extract_features_realtime(self, audio_path):
+        """Extract features from audio file in real-time"""
+        # This would implement real-time feature extraction
+        # For now, return dummy features
+        mfcc = np.random.randn(13, self.target_frames).astype(np.float32)
+        wav2vec2 = np.random.randn(768, self.target_frames).astype(np.float32)
+        return mfcc, wav2vec2
+
+def create_train_val_split(train_dataset, val_size=0.1, random_state=42):
+    """
+    Create train/validation split
     
-    # 转换为tensor并padding
-    acoustic_tensor = to_tensor_and_pad(acoustic_features)
-    mfb_tensor = to_tensor_and_pad(mfb_features)
-    embed_tensor = to_tensor_and_pad(embed_features)
+    Args:
+        train_dataset: Training dataset
+        val_size: Validation set size ratio
+        random_state: Random seed
     
-    # 收集标签
-    exertion_levels = [item['exertion_level'] for item in valid_batch if item['exertion_level'] is not None]
-    exertion_tensor = torch.tensor(exertion_levels, dtype=torch.long) if exertion_levels else None
+    Returns:
+        train_dataset, val_dataset: Split datasets
+    """
+    # Get all indices
+    indices = list(range(len(train_dataset)))
     
-    # 调试：检查标签收集情况
-    if len(exertion_levels) == 0:
-        print(f"警告: 批次中没有有效标签，批次大小: {len(valid_batch)}")
-        print(f"批次中的标签: {[item['exertion_level'] for item in valid_batch]}")
+    # Split indices
+    train_indices, val_indices = train_test_split(
+        indices, test_size=val_size, random_state=random_state, stratify=None
+    )
     
-    # 收集元数据
-    session_ids = [item['session_id'] for item in valid_batch]
-    metadata = [item['metadata'] for item in valid_batch]
+    # Create subset datasets
+    from torch.utils.data import Subset
+    train_subset = Subset(train_dataset, train_indices)
+    val_subset = Subset(train_dataset, val_indices)
+    
+    return train_subset, val_subset
+
+class FeatureNormalizer:
+    """Feature normalization utility"""
+    
+    def __init__(self):
+        self.mfcc_scaler = StandardScaler()
+        self.wav2vec2_scaler = StandardScaler()
+        self.fitted = False
+    
+    def fit(self, train_dataset):
+        """Fit normalizers on training data"""
+        print("Fitting feature normalizers...")
+        
+        mfcc_features = []
+        wav2vec2_features = []
+        
+        # Collect features from training dataset
+        for i in range(len(train_dataset)):
+            item = train_dataset[i]
+            
+            if 'mfcc' in item and item['mfcc'] is not None:
+                mfcc = item['mfcc'].numpy()
+                if len(mfcc.shape) == 3:
+                    mfcc = mfcc.reshape(-1, mfcc.shape[-1])
+                mfcc_features.append(mfcc)
+            
+            if 'wav2vec2' in item and item['wav2vec2'] is not None:
+                wav2vec2 = item['wav2vec2'].numpy()
+                if len(wav2vec2.shape) == 3:
+                    wav2vec2 = wav2vec2.reshape(-1, wav2vec2.shape[-1])
+                wav2vec2_features.append(wav2vec2)
+        
+        # Fit scalers
+        if mfcc_features:
+            mfcc_combined = np.vstack(mfcc_features)
+            self.mfcc_scaler.fit(mfcc_combined)
+            print(f"MFCC scaler fitted on {mfcc_combined.shape[0]} samples")
+        
+        if wav2vec2_features:
+            wav2vec2_combined = np.vstack(wav2vec2_features)
+            self.wav2vec2_scaler.fit(wav2vec2_combined)
+            print(f"wav2vec2 scaler fitted on {wav2vec2_combined.shape[0]} samples")
+        
+        self.fitted = True
+    
+    def transform(self, mfcc=None, wav2vec2=None):
+        """Transform features using fitted scalers"""
+        if not self.fitted:
+            raise ValueError("Normalizer must be fitted before transformation")
+        
+        if mfcc is not None:
+            mfcc_shape = mfcc.shape
+            mfcc_reshaped = mfcc.reshape(-1, mfcc.shape[-1])
+            mfcc_normalized = self.mfcc_scaler.transform(mfcc_reshaped)
+            mfcc = mfcc_normalized.reshape(mfcc_shape)
+        
+        if wav2vec2 is not None:
+            wav2vec2_shape = wav2vec2.shape
+            wav2vec2_reshaped = wav2vec2.reshape(-1, wav2vec2.shape[-1])
+            wav2vec2_normalized = self.wav2vec2_scaler.transform(wav2vec2_reshaped)
+            wav2vec2 = wav2vec2_normalized.reshape(wav2vec2_shape)
+        
+        return mfcc, wav2vec2
+    
+    def save(self, filepath):
+        """Save fitted normalizers"""
+        with open(filepath, 'wb') as f:
+            pickle.dump({
+                'mfcc_scaler': self.mfcc_scaler,
+                'wav2vec2_scaler': self.wav2vec2_scaler,
+                'fitted': self.fitted
+            }, f)
+    
+    def load(self, filepath):
+        """Load fitted normalizers"""
+        with open(filepath, 'rb') as f:
+            data = pickle.load(f)
+            self.mfcc_scaler = data['mfcc_scaler']
+            self.wav2vec2_scaler = data['wav2vec2_scaler']
+            self.fitted = data['fitted']
+
+def collate_fn(batch):
+    """
+    Custom collate function for batching
+    
+    Args:
+        batch: List of dataset items
+    
+    Returns:
+        dict: Batched data
+    """
+    # Separate features and labels
+    mfcc_list = []
+    wav2vec2_list = []
+    labels_list = []
+    segment_ids = []
+    
+    for item in batch:
+        if 'mfcc' in item and item['mfcc'] is not None:
+            mfcc_list.append(item['mfcc'])
+        if 'wav2vec2' in item and item['wav2vec2'] is not None:
+            wav2vec2_list.append(item['wav2vec2'])
+        if 'label' in item:
+            labels_list.append(item['label'])
+        if 'segment_id' in item:
+            segment_ids.append(item['segment_id'])
+    
+    # Stack features
+    mfcc = torch.stack(mfcc_list) if mfcc_list else None
+    wav2vec2 = torch.stack(wav2vec2_list) if wav2vec2_list else None
+    labels = torch.stack(labels_list) if labels_list else None
     
     return {
-        'session_ids': session_ids,
-        'acoustic': acoustic_tensor,
-        'mfb': mfb_tensor,
-        'embeds': embed_tensor,
-        'exertion_levels': exertion_tensor,
-        'metadata': metadata
+        'mfcc': mfcc,
+        'wav2vec2': wav2vec2,
+        'labels': labels,
+        'segment_ids': segment_ids
     }
 
-def greedy_grouped_split(df, n_folds=5, segment_duration=15.0):
-    """贪心分组分割，确保同一参与者的数据不会同时出现在训练和测试集中"""
-    participants = df['participant'].unique()
-    np.random.shuffle(participants)
+def create_dataloaders(config):
+    """
+    Create data loaders from configuration
     
-    folds = [[] for _ in range(n_folds)]
-    current_fold = 0
+    Args:
+        config: Configuration dictionary
     
-    for participant in participants:
-        participant_sessions = df[df['participant'] == participant].index.tolist()
-        folds[current_fold].extend(participant_sessions)
-        current_fold = (current_fold + 1) % n_folds
+    Returns:
+        train_loader, val_loader: Data loaders
+    """
+    # Extract configuration
+    feature_dir = config.get('feature_dir', 'data/features')
+    labels_file = config.get('labels_file', 'data/labels.csv')
+    batch_size = config.get('batch_size', 32)
+    num_workers = config.get('num_workers', 4)
+    val_size = config.get('val_size', 0.1)
+    random_state = config.get('random_state', 42)
     
-    return folds
-
-def get_fixed_fold_split(folds, fold_idx):
-    """获取指定fold的训练/测试分割"""
-    test_indices = folds[fold_idx]
-    train_indices = []
-    for i, fold in enumerate(folds):
-        if i != fold_idx:
-            train_indices.extend(fold)
-    
-    return train_indices, test_indices
-
-def get_dataloader_from_sessions(session_ids, meta_df, feature_dir, labels_df=None,
-                                use_acoustic=True, use_mfb=False, use_embed=False, selected_wav2vec2_layers=(7,),
-                                batch_size=4, shuffle=False, num_workers=6, pin_memory=True, persistent_workers=False, prefetch_factor=2):
-    """从会话ID列表创建数据加载器"""
-    # 过滤元数据
-    filtered_df = meta_df[meta_df['session'].isin(session_ids)].reset_index(drop=True)
-    
-    # 创建数据集
-    dataset = AudioFeatureDataset(
-        filtered_df, 
-        feature_dir,
-        labels_df=labels_df,
-        use_acoustic=use_acoustic,
-        use_mfb=use_mfb,
-        use_embed=use_embed,
-        selected_wav2vec2_layers=selected_wav2vec2_layers
+    # Create dataset
+    dataset = NoLeakageAudioDataset(
+        feature_dir=feature_dir,
+        labels_file=labels_file,
+        use_mfcc=config.get('use_mfcc', True),
+        use_wav2vec2=config.get('use_wav2vec2', True),
+        wav2vec2_layers=config.get('wav2vec2_layers', [4])
     )
     
-    # 创建数据加载器
-    dataloader = DataLoader(
-        dataset,
+    # Create train/validation split
+    train_dataset, val_dataset = create_train_val_split(
+        dataset, val_size=val_size, random_state=random_state
+    )
+    
+    # Create data loaders
+    train_loader = DataLoader(
+        train_dataset,
         batch_size=batch_size,
-        shuffle=shuffle,
+        shuffle=True,
         num_workers=num_workers,
-        pin_memory=pin_memory,
-        persistent_workers=persistent_workers and num_workers > 0,
-        prefetch_factor=prefetch_factor if num_workers > 0 else None,
-        collate_fn=collate_multi_feature_batch,
-        worker_init_fn=seed_worker
+        collate_fn=collate_fn,
+        pin_memory=True
     )
     
-    return dataloader
-
-def split_train_test_val(df, test_size=0.15, val_size=0.15, random_state=42):
-    """
-    将数据分割为训练集、验证集和测试集
-    保持同一参与者的数据在同一集合中
-    """
-    from sklearn.model_selection import train_test_split
-    
-    # 按参与者分组
-    participant_groups = df.groupby('participant')
-    
-    # 获取所有参与者ID
-    participants = list(participant_groups.groups.keys())
-    
-    # 首先分割出测试集
-    train_val_participants, test_participants = train_test_split(
-        participants, 
-        test_size=test_size, 
-        random_state=random_state,
-        stratify=None  # 无法按exertion level分层，因为每个参与者有多个level
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        collate_fn=collate_fn,
+        pin_memory=True
     )
     
-    # 从剩余参与者中分割出验证集
-    train_participants, val_participants = train_test_split(
-        train_val_participants,
-        test_size=val_size/(1-test_size),  # 调整比例
-        random_state=random_state
-    )
-    
-    # 获取各集合的session IDs
-    train_sessions = []
-    val_sessions = []
-    test_sessions = []
-    
-    for participant in train_participants:
-        train_sessions.extend(participant_groups.get_group(participant)['session'].tolist())
-    
-    for participant in val_participants:
-        val_sessions.extend(participant_groups.get_group(participant)['session'].tolist())
-    
-    for participant in test_participants:
-        test_sessions.extend(participant_groups.get_group(participant)['session'].tolist())
-    
-    return train_sessions, val_sessions, test_sessions
-
-def split_train_test_val_stratified(df, labels_df, test_size=0.15, val_size=0.15, random_state=42):
-    """
-    将数据分割为训练集、验证集和测试集
-    使用分层分割确保每个集合都包含所有标签类别
-    基于clip级别分割，确保同一个clip不重复出现
-    """
-    from sklearn.model_selection import train_test_split
-    import numpy as np
-    from collections import defaultdict
-    
-    # 按类别分组clips
-    class_clips = defaultdict(list)
-    
-    # 为每个clip分配标签，不同stride的clip作为独立数据点
-    for _, row in df.iterrows():
-        session_id = row['session']
-        base_session_id = session_id.split('_stride_')[0] if '_stride_' in session_id else session_id
-        
-        # 获取标签
-        label_row = labels_df[labels_df['Session Name'] == base_session_id]
-        if not label_row.empty:
-            exertion_level = label_row['Exertion'].iloc[0] - 1  # 转换为0-4
-            class_clips[exertion_level].append(session_id)
-    
-    train_sessions = []
-    val_sessions = []
-    test_sessions = []
-    
-    # 对每个类别单独进行分割
-    for class_id in range(5):  # 0-4类别
-        if class_id not in class_clips or len(class_clips[class_id]) == 0:
-            print(f"警告: 类别 {class_id} 没有clips")
-            continue
-            
-        clips = class_clips[class_id]
-        print(f"类别 {class_id}: {len(clips)} 个clips")
-        
-        # 确保每个类别至少有3个clips（训练、验证、测试各至少1个）
-        if len(clips) < 3:
-            print(f"警告: 类别 {class_id} clips太少 ({len(clips)})，无法保证每个集合都有代表")
-            # 将所有clips分配给训练集
-            train_sessions.extend(clips)
-            continue
-        
-        # 计算分割数量
-        n_test = max(1, int(len(clips) * test_size))
-        n_val = max(1, int(len(clips) * val_size))
-        n_train = len(clips) - n_test - n_val
-        
-        # 确保训练集至少有1个clip
-        if n_train < 1:
-            n_train = 1
-            n_val = max(1, len(clips) - n_test - n_train)
-        
-        # 随机打乱clips
-        np.random.seed(random_state + class_id)  # 为每个类别使用不同的种子
-        np.random.shuffle(clips)
-        
-        # 分割clips
-        train_clips = clips[:n_train]
-        val_clips = clips[n_train:n_train + n_val]
-        test_clips = clips[n_train + n_val:]
-        
-        # 添加clips到对应集合
-        train_sessions.extend(train_clips)
-        val_sessions.extend(val_clips)
-        test_sessions.extend(test_clips)
-        
-        print(f"  类别 {class_id} 分割: 训练={len(train_clips)}, 验证={len(val_clips)}, 测试={len(test_clips)}")
-    
-    return train_sessions, val_sessions, test_sessions
-
-
-# 示例使用
-if __name__ == "__main__":
-    # 示例：加载特征数据
-    feature_dir = "data/features"
-    metadata_df = get_session_metadata(feature_dir)
-    
-    if len(metadata_df) > 0:
-        print(f"找到 {len(metadata_df)} 个会话")
-        print("前5个会话:")
-        print(metadata_df.head())
-        
-        # 加载标签数据
-        labels_path = "data/segment_exertion_labels.csv"
-        labels_df = None
-        if os.path.exists(labels_path):
-            labels_df = pd.read_csv(labels_path)
-            print(f"加载标签数据: {len(labels_df)} 个标签")
-        else:
-            print("警告: 标签文件不存在，将不包含exertion level标签")
-        
-        # 创建数据集
-        dataset = AudioFeatureDataset(
-            metadata_df, 
-            feature_dir,
-            labels_df=labels_df,
-            use_acoustic=True,
-            use_embed=True,
-            selected_wav2vec2_layers=(4, 12)
-        )
-        
-        print(f"数据集大小: {len(dataset)}")
-        
-        # 测试加载一个样本
-        if len(dataset) > 0:
-            sample = dataset[0]
-            print(f"样本会话ID: {sample['session_id']}")
-            print(f"声学特征形状: {sample['acoustic'].shape if sample['acoustic'] is not None else 'None'}")
-            print(f"嵌入特征形状: {sample['embeds'].shape if sample['embeds'] is not None else 'None'}")
-            print(f"Exertion Level: {sample['exertion_level']}")
-    else:
-        print("未找到特征数据，请先运行特征提取") 
+    return train_loader, val_loader

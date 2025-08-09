@@ -100,18 +100,23 @@ def main():
         print("❌ 数据清洗失败，停止处理")
         return
     
-    # 步骤2: 音频分段
+    # 步骤2: 数据分割
+    if not run_script("split_data.py", "数据分割"):
+        print("❌ 数据分割失败，停止处理")
+        return
+    
+    # 步骤3: 音频分段
     if not run_script("segment_audio.py", "音频分段"):
         print("❌ 音频分段失败，停止处理")
         return
     
-    # 步骤3: 提取exertion level标签 (基于分段后的音频)
+    # 步骤4: 提取exertion level标签
     if not run_script("extract_labels.py", "提取Exertion Level标签"):
         print("❌ 标签提取失败，停止处理")
         return
     
-    # 步骤4: 特征提取 (使用RTX 4070优化 + 标签)
-    if not run_script("get_features.py", "特征提取 (RTX 4070优化 + Exertion Level标签)"):
+    # 步骤5: 特征提取
+    if not run_script("get_features.py", "特征提取"):
         print("❌ 特征提取失败，停止处理")
         return
     
