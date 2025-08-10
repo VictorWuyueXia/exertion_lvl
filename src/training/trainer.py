@@ -237,8 +237,11 @@ class Trainer:
         f1m = f1_score(all_labels, all_preds, average='macro')
         qwk = quadratic_weighted_kappa(all_labels, all_preds, self.cfg.num_classes)
         
-        # 生成可视化
+        # 生成可视化并保存到规范的结果目录
         self._generate_test_visualizations(all_labels, all_preds, all_probs)
+        
+        # 保存测试结果到规范的结果目录
+        self._save_test_results(all_labels, all_preds, all_probs, {"loss": total_loss / max(1, len(test_loader)), "acc": acc, "f1_macro": f1m, "qwk": qwk})
         
         return {"loss": total_loss / max(1, len(test_loader)), "acc": acc, "f1_macro": f1m, "qwk": qwk}
     
@@ -248,8 +251,16 @@ class Trainer:
         import seaborn as sns
         from sklearn.metrics import confusion_matrix
         
-        # 创建结果目录
-        os.makedirs(self.cfg.ckpt_dir, exist_ok=True)
+        # 使用规范的结果目录
+        if hasattr(self, 'current_result_dir'):
+            result_dir = self.current_result_dir
+        else:
+            # 如果没有当前结果目录，创建一个新的
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            result_dir = os.path.join("results", "experiments", f"{self.cfg.exp_name}_{timestamp}")
+            os.makedirs(result_dir, exist_ok=True)
+            self.current_result_dir = result_dir
         
         # 1. 混淆矩阵
         plt.figure(figsize=(8, 6))
@@ -260,7 +271,7 @@ class Trainer:
         plt.title('Test Set Confusion Matrix')
         plt.xlabel('Predicted')
         plt.ylabel('Actual')
-        plt.savefig(os.path.join(self.cfg.ckpt_dir, 'test_confusion_matrix.png'), 
+        plt.savefig(os.path.join(result_dir, 'test_confusion_matrix.png'), 
                    dpi=300, bbox_inches='tight')
         plt.close()
         
@@ -288,7 +299,7 @@ class Trainer:
         
         plt.ylim(0, 1.1)
         plt.grid(True, alpha=0.3)
-        plt.savefig(os.path.join(self.cfg.ckpt_dir, 'test_class_accuracy.png'), 
+        plt.savefig(os.path.join(result_dir, 'test_class_accuracy.png'), 
                    dpi=300, bbox_inches='tight')
         plt.close()
         
@@ -312,11 +323,11 @@ class Trainer:
         ax2.legend()
         
         plt.tight_layout()
-        plt.savefig(os.path.join(self.cfg.ckpt_dir, 'test_prediction_distribution.png'), 
+        plt.savefig(os.path.join(result_dir, 'test_prediction_distribution.png'), 
                    dpi=300, bbox_inches='tight')
         plt.close()
         
-        print(f"测试集可视化已保存到: {self.cfg.ckpt_dir}")
+        print(f"测试集可视化已保存到: {result_dir}")
 
     # --------------------- internals ---------------------
     def _unpack_batch(self, batch):
@@ -439,6 +450,95 @@ class Trainer:
             "config": self.cfg.__dict__,
             "metrics": {"qwk": qwk, "f1_macro": f1m, "val_loss": val_loss}
         }, path)
+        
+        # 保存训练历史到results目录
+        self._save_training_history()
+    
+    def _save_training_history(self):
+        """保存训练历史到规范的结果目录"""
+        from datetime import datetime
+        import json
+        
+        # 创建结果目录
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        result_dir = os.path.join("results", "experiments", f"{self.cfg.exp_name}_{timestamp}")
+        os.makedirs(result_dir, exist_ok=True)
+        
+        # 保存训练历史
+        history_file = os.path.join(result_dir, "training_history.json")
+        with open(history_file, 'w', encoding='utf-8') as f:
+            json.dump(self.history, f, indent=2, ensure_ascii=False)
+        
+        # 保存配置
+        config_file = os.path.join(result_dir, "config.json")
+        with open(config_file, 'w', encoding='utf-8') as f:
+            json.dump(self.cfg.__dict__, f, indent=2, ensure_ascii=False)
+        
+        # 保存最佳指标
+        best_metrics = {
+            "best_metric": float(self.best_metric),
+            "best_epoch": len(self.history) if self.history else 0,
+            "monitor_metric": self.cfg.monitor
+        }
+        metrics_file = os.path.join(result_dir, "best_metrics.json")
+        with open(metrics_file, 'w', encoding='utf-8') as f:
+            json.dump(best_metrics, f, indent=2, ensure_ascii=False)
+        
+        print(f"训练历史已保存到: {result_dir}")
+        
+        # 更新最新结果链接
+        latest_link = os.path.join("results", "experiments", "latest")
+        try:
+            if os.path.exists(latest_link):
+                os.remove(latest_link)
+            os.symlink(result_dir, latest_link)
+        except (OSError, FileExistsError):
+            # 在Windows/WSL环境下，symlink可能失败，我们创建一个文本文件记录最新路径
+            with open(latest_link + ".txt", 'w', encoding='utf-8') as f:
+                f.write(result_dir)
+        
+        # 保存当前结果目录路径供测试使用
+        self.current_result_dir = result_dir
+    
+    def _save_test_results(self, labels, preds, probs, metrics):
+        """保存测试结果到规范的结果目录"""
+        import json
+        
+        if not hasattr(self, 'current_result_dir'):
+            # 如果没有当前结果目录，创建一个新的
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            self.current_result_dir = os.path.join("results", "experiments", f"{self.cfg.exp_name}_{timestamp}")
+            os.makedirs(self.current_result_dir, exist_ok=True)
+        
+        # 保存测试指标
+        test_metrics_file = os.path.join(self.current_result_dir, "test_metrics.json")
+        with open(test_metrics_file, 'w', encoding='utf-8') as f:
+            json.dump(metrics, f, indent=2, ensure_ascii=False)
+        
+        # 保存预测结果
+        test_results = {
+            "labels": labels.tolist(),
+            "predictions": preds.tolist(),
+            "probabilities": probs.tolist(),
+            "metrics": metrics
+        }
+        test_results_file = os.path.join(self.current_result_dir, "test_results.json")
+        with open(test_results_file, 'w', encoding='utf-8') as f:
+            json.dump(test_results, f, indent=2, ensure_ascii=False)
+        
+        print(f"测试结果已保存到: {self.current_result_dir}")
+        
+        # 保存最佳模型路径信息
+        best_model_info = {
+            "model_path": os.path.join(self.cfg.ckpt_dir, f"{self.cfg.exp_name}_best.pt"),
+            "result_dir": self.current_result_dir,
+            "test_metrics": metrics
+        }
+        best_model_file = os.path.join("results", "models", "best_model_info.json")
+        os.makedirs(os.path.dirname(best_model_file), exist_ok=True)
+        with open(best_model_file, 'w', encoding='utf-8') as f:
+            json.dump(best_model_info, f, indent=2, ensure_ascii=False)
 
     def _early_stop(self) -> bool:
         # stop if no improvement (of the monitored metric) for 'patience' epochs

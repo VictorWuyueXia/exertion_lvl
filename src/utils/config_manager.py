@@ -235,7 +235,7 @@ class ConfigManager:
 def load_config_from_args() -> ConfigManager:
     """从命令行参数加载配置"""
     parser = argparse.ArgumentParser(description='运动强度检测模型训练')
-    parser.add_argument('--config', type=str, default='config/training_config.yaml',
+    parser.add_argument('--config', type=str, default='config/vgg16_wav2vec2_layer4_mfcc_exertion.yaml',
                        help='配置文件路径')
     parser.add_argument('--override', type=str, nargs='*',
                        help='覆盖配置项，格式: key=value')

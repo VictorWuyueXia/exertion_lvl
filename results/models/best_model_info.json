@@ -1,0 +1,10 @@
+{
+  "model_path": "./checkpoints/VGG16_wav2vec2_layer4_exertion_detection_coral_v2_best.pt",
+  "result_dir": "results/experiments/VGG16_wav2vec2_layer4_exertion_detection_coral_v2_20250810_013231",
+  "test_metrics": {
+    "loss": 0.4298185961587088,
+    "acc": 0.4858490566037736,
+    "f1_macro": 0.30231026010336354,
+    "qwk": 0.3692735737307513
+  }
+}
