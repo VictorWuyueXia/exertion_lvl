@@ -133,7 +133,7 @@ python -c "import torch; print(f'GPU可用: {torch.cuda.is_available()}')"
 
 - **wav2vec2特征提取**: 使用预训练的wav2vec2模型提取高质量的音频特征
 - **模块化设计**: 清晰的数据处理管道，便于维护和扩展
-- **GPU优化**: 针对RTX4070等现代GPU进行优化
+- **GPU优化**: 针对现代GPU进行优化
 - **Weights & Biases集成**: 完整的实验跟踪和监控系统
 - **实时监控**: 提供GPU使用情况、系统资源和训练指标监控
 - **可视化仪表板**: 实时查看训练进度和性能分析

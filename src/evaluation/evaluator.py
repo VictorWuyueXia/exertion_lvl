@@ -101,6 +101,14 @@ class ExertionEvaluator:
     
     def _calculate_metrics(self, labels, preds, probs):
         """Calculate evaluation metrics"""
+        # Convert inputs to numpy arrays if needed
+        if isinstance(labels, (list, tuple)):
+            labels = np.array(labels)
+        if isinstance(preds, (list, tuple)):
+            preds = np.array(preds)
+        if isinstance(probs, (list, tuple)):
+            probs = np.array(probs)
+        
         # Basic metrics
         accuracy = accuracy_score(labels, preds)
         f1_macro = f1_score(labels, preds, average='macro')
@@ -124,12 +132,16 @@ class ExertionEvaluator:
         
         # Per-class AUC
         auc_per_class = []
-        for i in range(probs.shape[1]):
-            try:
-                class_auc = roc_auc_score((labels == i).astype(int), probs[:, i])
-                auc_per_class.append(class_auc)
-            except:
-                auc_per_class.append(0.0)
+        if len(probs.shape) > 1:  # Check if probs is 2D
+            for i in range(probs.shape[1]):
+                try:
+                    class_auc = roc_auc_score((labels == i).astype(int), probs[:, i])
+                    auc_per_class.append(class_auc)
+                except:
+                    auc_per_class.append(0.0)
+        else:
+            # If probs is 1D, create dummy AUC values
+            auc_per_class = [0.0] * len(np.unique(labels))
         
         metrics = {
             'accuracy': accuracy,
@@ -183,6 +195,11 @@ class ExertionEvaluator:
         
         cm = confusion_matrix(labels, preds)
         
+        # Check if confusion matrix is empty
+        if cm.size == 0:
+            print(f"Warning: Empty confusion matrix for fold {fold_idx}")
+            return
+        
         plt.figure(figsize=(8, 6))
         sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
                    xticklabels=range(5), yticklabels=range(5))
@@ -198,13 +215,21 @@ class ExertionEvaluator:
         """Plot multiclass ROC curves"""
         suffix = f"_fold_{fold_idx}" if fold_idx is not None else ""
         
+        # Check if probs is valid
+        if len(probs.shape) < 2 or probs.shape[1] == 0:
+            print(f"Warning: Invalid probability array for ROC plot in fold {fold_idx}")
+            return
+        
         plt.figure(figsize=(10, 8))
         
         # Plot ROC curve for each class
         for i in range(probs.shape[1]):
-            fpr, tpr, _ = roc_curve((labels == i).astype(int), probs[:, i])
-            auc_score = roc_auc_score((labels == i).astype(int), probs[:, i])
-            plt.plot(fpr, tpr, label=f'Class {i} (AUC = {auc_score:.3f})')
+            try:
+                fpr, tpr, _ = roc_curve((labels == i).astype(int), probs[:, i])
+                auc_score = roc_auc_score((labels == i).astype(int), probs[:, i])
+                plt.plot(fpr, tpr, label=f'Class {i} (AUC = {auc_score:.3f})')
+            except:
+                print(f"Warning: Could not plot ROC curve for class {i}")
         
         plt.plot([0, 1], [0, 1], 'k--', label='Random')
         plt.xlabel('False Positive Rate')
@@ -268,9 +293,10 @@ class ExertionEvaluator:
             mask = labels == i
             if mask.sum() > 0:
                 acc = (preds[mask] == labels[mask]).mean()
-                f1 = f1_score(labels[mask], preds[mask], average='binary')
-                prec = precision_score(labels[mask], preds[mask], average='binary', zero_division=0)
-                rec = recall_score(labels[mask], preds[mask], average='binary', zero_division=0)
+                # 对于多分类，使用micro平均
+                f1 = f1_score(labels[mask], preds[mask], average='micro')
+                prec = precision_score(labels[mask], preds[mask], average='micro', zero_division=0)
+                rec = recall_score(labels[mask], preds[mask], average='micro', zero_division=0)
             else:
                 acc = f1 = prec = rec = 0.0
             
@@ -322,7 +348,13 @@ class ExertionEvaluator:
                 with open(eval_path, 'r', encoding='utf-8') as f:
                     fold_data = json.load(f)
                 
-                fold_metrics.append(fold_data['metrics'])
+                # Calculate metrics from saved data
+                fold_metrics_data = self._calculate_metrics(
+                    np.array(fold_data['labels']), 
+                    np.array(fold_data['predictions']), 
+                    np.array(fold_data['probabilities'])
+                )
+                fold_metrics.append(fold_metrics_data)
                 all_labels.extend(fold_data['labels'])
                 all_preds.extend(fold_data['predictions'])
                 all_probs.extend(fold_data['probabilities'])

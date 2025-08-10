@@ -89,7 +89,7 @@ wandb/
 test/
 
 # Results and outputs
-# result/  # 注释掉，现在包含在git中
+results/experiments/
 *.png
 *.jpg
 *.jpeg

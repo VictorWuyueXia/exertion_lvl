@@ -67,7 +67,7 @@ class WandBManager:
                 reinit=True
             )
             
-            print(f"WandB初始化成功: {experiment_name}")
+            print(f"WandB initialized: {experiment_name}")
             
         except Exception as e:
             print(f"WandB初始化失败: {e}")
@@ -80,7 +80,7 @@ class WandBManager:
         
         self.monitoring_thread = threading.Thread(target=self._monitor_system, daemon=True)
         self.monitoring_thread.start()
-        print("系统监控线程已启动")
+        print("System monitoring started")
     
     def _monitor_system(self):
         """系统监控线程"""
@@ -110,7 +110,7 @@ class WandBManager:
         if not self.enabled:
             return
         
-        # 格式化指标显示
+        # 每个epoch都打印
         metric_str = ", ".join([f"{k}: {v:.4f}" for k, v in metrics.items()])
         step_info = f" (Step: {step})" if step is not None else ""
         
@@ -126,6 +126,7 @@ class WandBManager:
             else:
                 color = Fore.YELLOW
                 
+            # 换行显示，不打断进度条
             print(f"{color}[WandB {metric_type}]{Style.RESET_ALL} {metric_str}{step_info}")
             
         except ImportError:
@@ -354,7 +355,7 @@ class WandBManager:
             plt.close()
             
         except Exception as e:
-            print(f"预测结果记录错误: {e}")
+            print(f"Prediction logging error: {e}")
     
     def save_model(self, model: torch.nn.Module, path: str, metadata: Optional[Dict] = None):
         """保存模型到WandB"""
@@ -381,6 +382,22 @@ class WandBManager:
             
         except Exception as e:
             print(f"模型保存错误: {e}")
+    
+    def log_cv_results(self, results: Dict[str, Any]):
+        """记录交叉验证结果"""
+        if not self.enabled:
+            return
+        
+        try:
+            wandb.log({
+                'cv/avg_accuracy': results.get('avg_accuracy', 0),
+                'cv/std_accuracy': results.get('std_accuracy', 0),
+                'cv/best_fold': results.get('best_fold', 0),
+                'cv/worst_fold': results.get('worst_fold', 0),
+                'cv/fold_accuracies': results.get('fold_accuracies', [])
+            })
+        except Exception as e:
+            print(f"交叉验证结果记录错误: {e}")
     
     def log_config(self, config: Dict[str, Any]):
         """记录配置信息"""

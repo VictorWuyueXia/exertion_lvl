@@ -141,7 +141,7 @@ class ConfigManager:
             'wav2vec2_dim': self.get('model.wav2vec2_dim', 768),  # 从配置文件读取
             'num_classes': self.get('model.num_classes', 5),  # 从配置文件读取
             'dropout_rate': self.get('model.dropout_rate', 0.5),  # 从配置文件读取
-            'optimize_for_rtx4070': self.get('model.optimize_for_rtx4070', True),  # 从配置文件读取
+            'optimize_for_gpu': self.get('model.optimize_for_gpu', True),  # 从配置文件读取
             'batch_size': self.get('training.batch_size'),
             'epochs': self.get('training.epochs'),
             'learning_rate': self.get('training.learning_rate'),
@@ -175,6 +175,10 @@ class ConfigManager:
         """获取完整配置（包含所有节）"""
         return self.config.copy()
     
+    def to_dict(self) -> Dict[str, Any]:
+        """获取完整配置（兼容性方法）"""
+        return self.config.copy()
+    
     def get_model_config(self) -> Dict[str, Any]:
         """获取模型配置"""
         return {
@@ -184,7 +188,7 @@ class ConfigManager:
             'dropout_rate': self.get('model.dropout_rate'),  # 从配置文件读取
             'use_mfcc': self.get('data.features.use_mfcc', True),
             'use_wav2vec2': self.get('data.features.use_wav2vec2', True),
-            'optimize_for_rtx4070': self.get('model.optimize_for_rtx4070', True),
+            'optimize_for_gpu': self.get('model.optimize_for_gpu', True),
         }
     
     def get_evaluation_config(self) -> Dict[str, Any]:
